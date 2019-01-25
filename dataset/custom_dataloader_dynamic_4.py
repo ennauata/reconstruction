@@ -299,7 +299,7 @@ class GraphData(Dataset):
                 bins.append(bin_sample)
 
                 # DEBUG #
-                print('add false edge')
+                #print('add false edge')
                 rgb = sample[:3, :, :]*255.0
                 rgb = Image.fromarray(rgb.astype('uint8').transpose(1, 2, 0))
                 cmap = sample[3, :, :]*255.0

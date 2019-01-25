@@ -1,6 +1,6 @@
 import torch.nn as nn
 import torch.utils.model_zoo as model_zoo
-
+import torch
 
 __all__ = ['ResNet', 'resnet18', 'resnet34', 'resnet50', 'resnet101',
            'resnet152']
@@ -211,4 +211,32 @@ def resnet152(pretrained=False, **kwargs):
     model = ResNet(Bottleneck, [3, 8, 36, 3], **kwargs)
     if pretrained:
         model.load_state_dict(model_zoo.load_url(model_urls['resnet152']))
+    return model
+
+def CustomResNet(pretrained=False, **kwargs):
+    """Constructs a ResNet-34 model.
+
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    """
+    model = ResNet(BasicBlock, [3, 4, 6, 3], **kwargs)
+    if pretrained:
+        state_dict = model_zoo.load_url(model_urls['resnet34'])
+        state = model.state_dict()
+        new_state_dict = state
+        for k, v in state_dict.items():
+            if k in state and v.shape == state[k].shape:
+                new_state_dict[k] = v
+                continue
+            if len(v.shape) == 4:
+                if state[k].shape[1] < v.shape[1]:
+                    new_state_dict[k] = v[:, :state[k].shape[1]]
+                else:
+                    new_state_dict[k] = torch.cat([v, v[:, :1].repeat((1, state[k].shape[1] - v.shape[1], 1, 1))], dim=1)
+                    pass
+                pass
+            continue
+        state.update(new_state_dict)
+        model.load_state_dict(state)
+        pass
     return model

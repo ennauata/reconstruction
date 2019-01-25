@@ -19,6 +19,20 @@ import os
 from dataset.metrics import Metrics
 from collections import OrderedDict
 
+import argparse
+
+parser = argparse.ArgumentParser(description='PlaneFlow')
+
+parser.add_argument('--data_path', dest='data_path',
+                    help='path to data',
+                    default='/home/nelson/Workspace', type=str)
+parser.add_argument('--corner_type', dest='corner_type',
+                    help='corner type for the search algorithm',
+                    default='expanded_primitives_annots_only', type=str)
+
+args = parser.parse_args()
+
+
 ##############################################################################################################
 ############################################### Define Model #################################################
 ##############################################################################################################
@@ -31,13 +45,13 @@ sample_eval = sample_eval.eval()
 ##############################################################################################################
 ############################################# Setup Training #################################################
 ##############################################################################################################
-PREFIX = '/home/nelson/Workspace'
+PREFIX = args.data_path
 LADATA_FOLDER = '{}/building_reconstruction/la_dataset_new/'.format(PREFIX)
 ANNOTS_FOLDER = '{}/building_reconstruction/la_dataset_new/annots'.format(PREFIX)
 #EDGES_FOLDER = '/media/nelson/Workspace1/Projects/building_reconstruction/la_dataset/dets/edges'
 #CORNERS_FOLDER = '/media/nelson/Workspace1/Projects/building_reconstruction/la_dataset/dets/corners'
-EDGES_FOLDER = '{}/building_reconstruction/la_dataset_new/expanded_primitives_dets/edges'.format(PREFIX)
-CORNERS_FOLDER = '{}/building_reconstruction/la_dataset_new/expanded_primitives_dets/corners'.format(PREFIX)
+EDGES_FOLDER = '{}/building_reconstruction/la_dataset_new/{}/edges'.format(PREFIX, args.corner_type)
+CORNERS_FOLDER = '{}/building_reconstruction/la_dataset_new/{}/corners'.format(PREFIX, args.corner_type)
 with open('{}/building_reconstruction/la_dataset_new/train_list_prime.txt'.format(PREFIX)) as f:
     train_list = [line.strip() for line in f.readlines()][:-50]
 with open('{}/building_reconstruction/la_dataset_new/valid_list.txt'.format(PREFIX)) as f:
