@@ -59,7 +59,7 @@ parser.add_argument('--max_num_edges', dest='max_num_edges',
                     help='maximum number of_edges',
                     default=20, type=int)
 parser.add_argument('--suffix', dest='suffix',
-                    help='the suffix to distinguish experiments with different configurations',
+                    help='the suffix to distinguish experiments with different configurations, ["", "mixed", "uniform", "single"]',
                     default='', type=str)
 
 
@@ -132,6 +132,24 @@ def testOneEpoch(options, edge_classifier, dataset, num_edges):
     edge_classifier.train()
     return
 
+def visualize(options, dataset):
+    images = []
+    row_images = []
+    all_statistics = np.zeros(4)
+    for building in dataset.buildings:
+        building_images, statistics = building.visualize()
+        row_images += building_images
+        if len(row_images) >= 10:
+            images.append(row_images)
+            row_images = []
+            pass
+        all_statistics += statistics
+        continue
+    image = tileImages(images)
+    cv2.imwrite(options.test_dir + '/results.png', image)
+    print(float(all_statistics[0]) / all_statistics[1], float(all_statistics[0]) / all_statistics[2], float(all_statistics[3]) / len(dataset.buildings))
+    return
+
 def visualizeExample(options, im, label_pred, label_gt, confidence=1, prefix='', suffix=''):
     image = (im[:3] * 255).transpose((1, 2, 0)).astype(np.uint8)
     image[im[3] > 0.5] = np.array([255, 0, 0], dtype=np.uint8)
@@ -196,17 +214,54 @@ else:
     all_num_edges = range(options.max_num_edges)
     pass
 
+if options.task == 'search_test':
+    if options.restore == 1:
+        edge_classifier.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(options.num_edges) + '_checkpoint.pth'))
+        edge_classifier.eval()
+        pass
+    
+    dset_val = GraphData(options, valid_list, split='val', num_edges=-1)
+    searcher = Searcher(options)
+    for split, dataset in [('val', dset_val)]:
+        all_statistics = np.zeros(options.max_num_edges + 1)
+        for building in dataset.buildings:
+            building.reset(0)
+            statistics = searcher.search(building, num_edges_target=-1)
+            print(building._id, building.current_num_edges())            
+            all_statistics += statistics
+            if statistics.sum() < 1:
+                print(building._id, statistics.sum(), building.num_edges, building.num_edges_gt)
+                pass
+            building.save()
+            continue
+        print(split, all_statistics / len(dataset.buildings))
+        continue
+    exit(1)
+    pass
+
+if options.task == 'visualize':
+    dset_val = GraphData(options, valid_list, split='val', num_edges=-1)
+    visualize(options, dset_val)
+    exit(1)
+    pass
+
 ## Train incrementally
 for num_edges in all_num_edges:
+    print('num edges', num_edges)
     if options.restore == 1:
         edge_classifier.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth'))
         optimizer.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges) + '_optim.pth'))
+    elif options.restore == 2 and num_edges > 0:
+        edge_classifier.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges - 1) + '_checkpoint.pth'))
+        optimizer.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges - 1) + '_optim.pth'))
         pass
+    if options.num_edges == -1 and os.path.exists(options.checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth'):
+        continue
     
-    dset_val = GraphData(options, valid_list, split='val', num_edges=-1 if 'mixed' in options.suffix else num_edges)
+    dset_val = GraphData(options, valid_list, split='val', num_edges=num_edges)
     
     if options.task == 'test':
-        testOneEpoch(options, edge_classifier, dset_val, num_edges=-1 if 'mixed' in options.suffix else num_edges)
+        testOneEpoch(options, edge_classifier, dset_val, num_edges=num_edges)
         exit(1)
         pass
     
@@ -218,6 +273,7 @@ for num_edges in all_num_edges:
         for split, dataset in [('train', dset_train), ('val', dset_val)]:
             all_statistics = np.zeros(options.max_num_edges + 1)
             for building in dataset.buildings:
+                building.reset(num_edges)
                 statistics = searcher.search(building, num_edges_target=num_edges + 1)
                 all_statistics += statistics
                 if statistics.sum() < 1:
@@ -231,10 +287,10 @@ for num_edges in all_num_edges:
         pass
 
     
-    for epoch in range(20):
-        os.system('rm ' + options.test_dir + '/' + str(num_edges) + '_*')
+    for epoch in range(10):
+        #os.system('rm ' + options.test_dir + '/' + str(num_edges) + '_*')
         dset_train.reset()
-        train_loader = DataLoader(dset_train, batch_size=options.batch_size, shuffle=True, num_workers=16)    
+        train_loader = DataLoader(dset_train, batch_size=options.batch_size, shuffle=True, num_workers=1)    
         epoch_losses = []
         ## Same with train_loader but provide progress bar
         data_iterator = tqdm(train_loader, total=int(np.ceil(float(len(dset_train)) / options.batch_size)))
@@ -274,7 +330,7 @@ for num_edges in all_num_edges:
                     continue
                 pass
             continue
-
+        
         print('loss', np.array(epoch_losses).mean(0))
         # if epoch % 10 == 0:
         #     torch.save(model.state_dict(), options.checkpoint_dir + '/checkpoint_' + str(epoch // 10) + '.pth')
@@ -286,6 +342,9 @@ for num_edges in all_num_edges:
         testOneEpoch(options, edge_classifier, dset_val, num_edges)        
         continue
 
+    if 'uniform' in options.suffix or 'single' in options.suffix:
+        continue
+    
     searcher = Searcher(options)
     for split, dataset in [('train', dset_train), ('val', dset_val)]:
         all_statistics = np.zeros(options.max_num_edges + 1)
@@ -299,5 +358,4 @@ for num_edges in all_num_edges:
             continue
         print(split, all_statistics / len(dataset.buildings))
         continue
-    
     continue

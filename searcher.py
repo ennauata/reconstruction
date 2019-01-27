@@ -20,11 +20,13 @@ class Searcher():
         self.edge_classifiers = {}
         # if options.num_edges == 0:
         #     all_num_edges = []
-        if options.num_edges >= 0:
-            all_num_edges = [options.num_edges]
-        else:
-            all_num_edges = range(options.max_num_edges)
-            pass
+        
+        # if options.num_edges >= 0:
+        #     all_num_edges = [options.num_edges]
+        # else:
+        #     all_num_edges = range(options.max_num_edges)
+        #     pass
+        all_num_edges = range(options.max_num_edges)
         for num_edges in all_num_edges:
             filename = options.checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth'
             if os.path.exists((filename)):
@@ -45,24 +47,45 @@ class Searcher():
     def search(self, building, num_edges_target=-1):
         statistics = np.zeros(self.options.max_num_edges + 1, dtype=np.int32)
         while True:
-            _input, _labels = building.create_samples()
+            _input, _labels = building.create_samples(mode='inference')
             current_num_edges = building.current_num_edges()
             with torch.no_grad():
                 _input = _input.cuda()
-                logits = self.edge_classifiers[current_num_edges](_input)
+                if 'uniform' in self.options.suffix or 'single' in self.options.suffix:
+                    logits = self.edge_classifiers[0](_input)
+                else:
+                    logits = self.edge_classifiers[current_num_edges](_input)
+                    pass
                 probs = torch.nn.functional.softmax(logits, dim=-1)
                 probs = probs[:, 1]
                 probs = probs.detach().cpu().numpy()
                 pass
-            
+            _labels = _labels.detach().cpu().numpy()
+
+            if 'single' in self.options.suffix:
+                probs[np.nonzero(building.current_edges())[0]] = 0
+                pass
             if probs.max() < 0.5:
                 if _labels.max() < 0.5:
-                    statistics[current_num_edges] += 1
+                    if current_num_edges < self.options.max_num_edges:
+                        statistics[current_num_edges] += 1
+                        pass
+                    statistics[-1] += 1                    
                     pass
+                break
+            if 'batch' in self.options.suffix:
+                indices = probs.argsort()
+                for edge_index in indices:
+                    if probs[edge_index] > 0.5:
+                        building.update_edge(edge_index)
+                        pass
+                    continue
                 break
             best_edge = probs.argmax()
             building.update_edge(best_edge)
-            statistics[current_num_edges] += _labels[best_edge]
+            if current_num_edges < self.options.max_num_edges:
+                statistics[current_num_edges] += _labels[best_edge]
+                pass
             if num_edges_target > 0 and building.current_num_edges() == num_edges_target:
                 break
             continue

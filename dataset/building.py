@@ -1,16 +1,22 @@
-from utils.data_utils import draw_edges
 import numpy as np
-import random
 import os
 from skimage.draw import line_aa
 from PIL import Image, ImageDraw
 import torch
 import cv2
 
+def draw_edges(edges_on, edges):
+    im = np.zeros((256, 256))
+    for edge in edges[edges_on > 0.5]:
+        cv2.line(im, (edge[1], edge[0]), (edge[3], edge[2]), thickness=3, color=1)
+        continue
+    return im
+
 class Building():
     """Maintain a building to create data examples in the same format"""
 
     def __init__(self, options, _id, with_augmentation=True):
+        self.options = options
         PREFIX = options.data_path
         LADATA_FOLDER = '{}/building_reconstruction/la_dataset_new/'.format(PREFIX)
         ANNOTS_FOLDER = '{}/building_reconstruction/la_dataset_new/annots'.format(PREFIX)
@@ -22,22 +28,27 @@ class Building():
         self.corners_folder = CORNERS_FOLDER
         self.dataset_folder = LADATA_FOLDER
         self._id = _id
+        self.with_augmentation = with_augmentation
         
         # annots
         annot_path = os.path.join(self.annots_folder, _id +'.npy')
         annot = np.load(open(annot_path, 'rb'), encoding='bytes')
         graph = dict(annot[()])
 
-        # augment data
-        if with_augmentation:
-            rot = random.choice([0, 90, 180, 270])
-            flip = random.choice([True, False])
-            use_gt = random.choice([False])
-        else:
-            rot = 0
-            flip = False
-            use_gt = False
-
+        # # augment data
+        # if with_augmentation:
+        #     rot = np.random.choice([0, 90, 180, 270])
+        #     flip = np.random.choice([True, False])
+        #     use_gt = np.random.choice([False])
+        # else:
+        #     rot = 0
+        #     flip = False
+        #     use_gt = False
+        
+        rot = 0
+        flip = False
+        use_gt = False
+        
         #print(rot, flip)
         # load annots
         corners_annot, edges_annot = self.load_annot(graph, rot, flip)
@@ -56,25 +67,35 @@ class Building():
 
         # extract edges from corners
         edges_det_from_corners, ce_assignment = self.extract_edges_from_corners(corners_det, None)
-        e_xys = self.compute_edges_map(edges_det_from_corners)
-
+        #e_xys = self.compute_edges_map(edges_det_from_corners)
+        # print(edges_det_from_corners)
+        # print(e_xys)
+        # print(corners_det)
         # match compute true/false samples for detections
         corners_gt, edges_gt = self.compute_gt(corners_det, edges_det_from_corners, corners_annot, edges_annot, placeholder=False)
+        #exit(1)
+
         inds = np.load(edges_embs_path.replace('edges_feats', 'filters'))[1, :]
         edges_gt = edges_gt.astype(np.int32)
         ce_t0 = np.zeros_like(edges_gt)
         #ce_t0[inds] = 1.0
         corner_edge = self.compute_dists(corners_det, edges_det_from_corners, ce_assignment)
-        ce_angles_bins, ca_gt = self.compute_corner_angle_bins(corner_edge, edges_det_from_corners, edges_gt, corners_det)
+
+        
+        #ce_angles_bins, ca_gt = self.compute_corner_angle_bins(corner_edge, edges_det_from_corners, edges_gt, corners_det)
+        ce_angles_bins = None
 
         # read images
-        imgs = self.read_input_images(_id, rot, flip, corners_det, self.dataset_folder)
+        imgs = self.read_input_images(_id, self.dataset_folder)
 
         self.imgs = imgs
+        self.corners_det = np.round(corners_det[:, :2]).astype(np.int32)
         self.edges_gt = edges_gt
-        self.e_xys = e_xys
+        self.edges_det = np.round(edges_det_from_corners).astype(np.int32)
+        #self.e_xys = e_xys
         self.ce_angles_bins = ce_angles_bins
-        self.corner_edge = corner_edge
+        self.corner_edge = edges_det_from_corners
+        
         self.generate_bins = False
         self.num_edges = len(self.edges_gt)
         self.num_edges_gt = self.edges_gt.sum()
@@ -92,11 +113,12 @@ class Building():
             pass
         
         #if _id == '1525563157.13' and True:
-        if _id == '1525562955.6':
+        if _id == '1525562852.02' and False:
             print('test')
             print(self.predicted_edges.shape)
-            mask = draw_edges(self.predicted_edges[-1], self.e_xys)
-            image = (self.imgs[:3].transpose((1, 2, 0)) * 255).astype(np.uint8)
+            print(self.predicted_edges[-1], self.edges_gt)
+            mask = draw_edges(self.predicted_edges[-1], self.edges_det)
+            image = (self.imgs[:, :, :3]).astype(np.uint8)
             mask = np.clip(mask * 255, 0, 255).astype(np.uint8)
             image[mask > 128] = np.array([0, 0, 255])
             cv2.imwrite('test/image.png', image)
@@ -105,47 +127,63 @@ class Building():
             pass
         return
 
-    def create_samples(self, num_edges_source=-1):
+    def create_samples(self, num_edges_source=-1, mode='inference'):
         """Create all data examples:
         num_edges_source: source graph size, -1 for using the latest
         """
         assert(num_edges_source < len(self.predicted_edges))
-        current_edges = self.predicted_edges[num_edges_source].copy()
-        # draw current state
-        im_s0 = draw_edges(current_edges, self.e_xys)
         samples = []
         labels = []
         for edge_index in range(self.num_edges):
-            # draw new state            
-            new_state = np.array(current_edges)
-            new_state[edge_index] = 1 - new_state[edge_index]
-            im_s1 = draw_edges(new_state, self.e_xys)
-            sample = np.concatenate([self.imgs, im_s0[np.newaxis, :, :], im_s1[np.newaxis, :, :]])
-            label = 1 if new_state[edge_index] == self.edges_gt[edge_index] else 0
+            sample, label = self.create_sample(edge_index, num_edges_source, mode=mode)
             samples.append(sample)
             labels.append(label)
             continue
-        samples = np.stack(samples)        
-        labels = np.stack(labels)
-        return torch.from_numpy(samples.astype(np.float32)), torch.from_numpy(labels).long()
+        samples = torch.stack(samples)        
+        labels = torch.stack(labels).view(-1)
+        return samples, labels
 
-    def create_sample(self, edge_index=-1, num_edges_source=-1):
+    def create_sample(self, edge_index=-1, num_edges_source=-1, mode='training'):
         """Create one data example:
         edge_index: edge index to flip, -1 for random sampling
         num_edges_source: source graph size, -1 for using the latest
         """
-        assert(num_edges_source < len(self.predicted_edges))
-        current_edges = self.predicted_edges[num_edges_source].copy()
+        #assert(num_edges_source < len(self.predicted_edges))
+
+        if self.with_augmentation:
+            imgs, corners_det, edges_det = self.augment(self.imgs.copy(), self.corners_det, self.edges_det)
+        else:
+            imgs, corners_det, edges_det = self.imgs, self.corners_det, self.edges_det
+            pass
+        imgs = imgs.transpose((2, 0, 1)).astype(np.float32) / 255
+        
+        img_c = self.compute_corner_image(corners_det)
+        imgs = np.concatenate([imgs, np.array(img_c)[np.newaxis, :, :]], axis=0)
+
         if edge_index < 0:
             edge_index = np.random.randint(self.num_edges)
+            pass        
+        if ('uniform' in self.options.suffix or 'single' in self.options.suffix) and mode == 'training':
+            indices = np.nonzero(self.edges_gt)[0]
+            indices = np.random.choice(indices, np.random.randint(len(indices) + 1), replace=False)
+            current_edges = np.zeros(self.edges_gt.shape, dtype=np.int32)
+            current_edges[indices] = 1
+            if 'single' in self.options.suffix:
+                current_edges[edge_index] = 0
+                pass            
+        else:
+            current_edges = self.predicted_edges[num_edges_source].copy()
             pass
         # draw current state
-        im_s0 = draw_edges(current_edges, self.e_xys)
+        im_s0 = draw_edges(current_edges, edges_det)
         # draw new state
         new_state = np.array(current_edges)
+        if 'single' in self.options.suffix:
+            new_state.fill(0)
+            pass
         new_state[edge_index] = 1 - new_state[edge_index]
-        im_s1 = draw_edges(new_state, self.e_xys)
-        sample = np.concatenate([self.imgs, im_s0[np.newaxis, :, :], im_s1[np.newaxis, :, :]])
+        im_s1 = draw_edges(new_state, edges_det)
+        sample = np.concatenate([imgs, im_s0[np.newaxis, :, :], im_s1[np.newaxis, :, :]])
         label = 1 if new_state[edge_index] == self.edges_gt[edge_index] else 0
         #sample_rev = np.concatenate([imgs, im_s1[np.newaxis, :, :], im_s0[np.newaxis, :, :]])    
         #label_rev = 0.0 if new_state[k] == edges_gt[k] else 1.0
@@ -189,6 +227,9 @@ class Building():
 
     def current_num_edges(self):
         return len(self.predicted_edges) - 1
+
+    def current_edges(self):
+        return self.predicted_edges[-1]
     
     def reset(self, num_edges=0):
         """Reset predicted edges"""
@@ -204,46 +245,45 @@ class Building():
         """Save predicted edges"""
         return np.all(self.predicted_edges[-1] == self.edges_gt)
 
-    def compute_corner_image(self, corners_annot):
+    def compute_corner_image(self, corners):
         im_c = np.zeros((256, 256))
-        for c in corners_annot:
-            x, y, _, _ = np.array(c)
-            x, y = int(x), int(y)
-            im_c[x, y] = 255.0
+        for c in corners:
+            cv2.circle(im_c, (c[1], c[0]), color=1, radius=5, thickness=-1)
+            # x, y, _, _ = np.array(c)
+            # x, y = int(x), int(y)
+            # im_c[x, y] = 1
         return im_c
 
-    def read_input_images(self, _id, rot, flip, corners_annot, path):
+    def read_input_images(self, _id, path):
 
-        im = Image.open("{}/rgb/{}.jpg".format(path, _id))#.resize((128, 128))
+        im = np.array(Image.open("{}/rgb/{}.jpg".format(path, _id)))#.resize((128, 128))
+        #im = cv2.imread("{}/rgb/{}.jpg".format(path, _id))#.resize((128, 128))
         # dp_im = Image.open(info['path'].replace('rgb', 'depth')).convert('L')
         # surf_im = Image.open(info['path'].replace('rgb', 'surf'))
         # gray_im = Image.open(info['path'].replace('rgb', 'gray')).convert('L')
-        out_im = Image.open("{}/outlines/{}.jpg".format(path, _id)).convert('L')#.resize((128, 128))
+        #out_im = Image.open("{}/outlines/{}.jpg".format(path, _id)).convert('L')#.resize((128, 128))
 
-        im = im.rotate(rot)
+        #im = im.rotate(rot)
         # dp_im = dp_im.rotate(rot)
         # surf_im = surf_im.rotate(rot)
         # gray_im = gray_im.rotate(rot)
-        out_im = out_im.rotate(rot)
-        if flip == True:
-            im = im.transpose(Image.FLIP_LEFT_RIGHT)
-            out_im = out_im.transpose(Image.FLIP_LEFT_RIGHT)
+        #out_im = out_im.rotate(rot)
+        # if flip == True:
+        #     im = im.transpose(Image.FLIP_LEFT_RIGHT)
+        #     out_im = out_im.transpose(Image.FLIP_LEFT_RIGHT)
 
         # print(rot, flip)
         # dp_im = dp_im.transpose(Image.FLIP_LEFT_RIGHT)
         # surf_im = surf_im.transpose(Image.FLIP_LEFT_RIGHT)
         # gray_im = gray_im.transpose(Image.FLIP_LEFT_RIGHT)
         #out_im = out_im.transpose(Image.FLIP_LEFT_RIGHT)
-        ims_c = self.compute_corner_image(corners_annot)
-
-        imgs = np.concatenate([np.array(im), np.array(ims_c)[:, :, np.newaxis]], axis=-1)
 
         ## Add normalization here for consistency
-        imgs = imgs.transpose(2, 0, 1) / 255.0 # - 0.5
-        return imgs
+        #imgs = im.transpose((2, 0, 1)) / 255.0 # - 0.5
         #return np.array(out_im)[:, :, np.newaxis]
         #return np.concatenate([np.array(im), np.array(dp_im)[:, :, np.newaxis], np.array(gray_im)[:, :, np.newaxis], np.array(surf_im)], axis=-1)
         #return np.array(im)
+        return im
 
     def compute_edges_map(self, edges_det, grid_size=256, scale=1.0):
 
@@ -495,3 +535,74 @@ class Building():
         a = np.deg2rad(angle)
         new = np.array([org[0]*np.cos(a) + org[1]*np.sin(a), -org[0]*np.sin(a) + org[1]*np.cos(a)])
         return new+rot_center
+
+    def augment(self, imgs, corners, edges):
+        size = imgs.shape[1]
+        ys, xs = np.nonzero(imgs.min(-1) < 250)
+        vertices = np.array([[xs.min(), ys.min()], [xs.min(), ys.max()], [xs.max(), ys.min()], [xs.max(), ys.max()]])
+        #center = vertices[0] + np.random.random(2) * (vertices[-1] - vertices[0])
+        angle = np.random.random() * 360
+        #rotation_matrix = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
+        #print('vertices', tuple(((vertices[0] + vertices[-1]) / 2).tolist()))
+        #rotation_matrix = cv2.getRotationMatrix2D(tuple(((vertices[0] + vertices[-1]) / 2).tolist()), angle, 1)
+        rotation_matrix = cv2.getRotationMatrix2D((0, 0), angle, 1)
+        transformed_vertices = np.matmul(rotation_matrix, np.concatenate([vertices, np.ones((len(vertices), 1))], axis=-1).transpose()).transpose()
+        mins = transformed_vertices.min(0)
+        maxs = transformed_vertices.max(0)
+        max_range = (maxs - mins).max()
+        new_size = min(max_range, size) + max(size - max_range, 0) * np.random.random()
+        scale = float(new_size) / max_range
+        offset = (np.random.random(2) * 2 - 1) * (size - (maxs - mins) * scale) / 2 + (size / 2 - (maxs + mins) / 2 * scale)
+        #offset = 0 * (size - (maxs - mins) * scale) + (size / 2 - (maxs + mins) / 2 * scale)
+        translation_matrix = np.array([[scale, 0, offset[0]], [0, scale, offset[1]]])
+        transformation_matrix = np.matmul(translation_matrix, np.concatenate([rotation_matrix, np.array([[0, 0, 1]])], axis=0))
+        #transformation_matrix_shuffled = np.stack([transformation_matrix[1], transformation_matrix[0]], axis=0)
+        # transformation_matrix_shuffled = transformation_matrix.copy()
+        # transformation_matrix_shuffled[1, 2] = transformation_matrix[0, 2]
+        # transformation_matrix_shuffled[0, 2] = transformation_matrix[1, 2]        
+        imgs = cv2.warpAffine(imgs, transformation_matrix, (size, size), borderValue=(255, 255, 255))
+        #print(corners)
+        corners_ori = corners
+        corners = np.matmul(transformation_matrix, np.concatenate([corners[:, [1, 0]], np.ones((len(corners), 1))], axis=-1).transpose()).transpose()
+        if (corners.min() < 0 or corners.max() > 256) and False:
+            cv2.imwrite('test/image.png', imgs.astype(np.uint8))
+            print(vertices)
+            print(corners_ori)
+            print(np.matmul(rotation_matrix, np.concatenate([corners_ori[:, [1, 0]], np.ones((len(corners), 1))], axis=-1).transpose()).transpose() * scale)
+            print(transformed_vertices * scale)
+            print(scale, size, new_size, mins, maxs, (maxs - mins) * scale, (maxs + mins) / 2 * scale, offset, corners.min(0), corners.max(0))
+            print((size - (maxs - mins) * scale) / 2, size / 2 - (maxs + mins) / 2 * scale, (maxs + mins) / 2 * scale)
+            exit(1)
+            pass
+        corners = corners[:, [1, 0]]            
+        corners = np.clip(np.round(corners).astype(np.int32), 0, size - 1)
+        edge_points = edges.reshape((-1, 2))[:, [1, 0]]
+        edge_points = np.matmul(transformation_matrix, np.concatenate([edge_points, np.ones((len(edge_points), 1))], axis=-1).transpose()).transpose()
+        edges = edge_points[:, [1, 0]].reshape((-1, 4))
+        edges = np.clip(np.round(edges).astype(np.int32), 0, size - 1)
+        #print('rotation', rotation_matrix, translation_matrix)
+        #print(corners)
+        return imgs, corners, edges
+
+    def visualize(self, mode='last_mistake'):
+        image = self.imgs        
+        corner_image = self.compute_corner_image(self.corners_det)
+        image[corner_image > 0.5] = np.array([255, 0, 0], dtype=np.uint8)
+        edge_image = image.copy()
+        edge_mask = draw_edges(self.predicted_edges[-1], self.edges_det)
+        edge_image[edge_mask > 0.5] = np.array([255, 0, 255], dtype=np.uint8)
+        images = [edge_image]
+        if (self.predicted_edges[-1] - self.edges_gt).max() > 0:
+            for edges in self.predicted_edges:
+                if (edges - self.edges_gt).max() > 0:
+                    edge_image = image.copy()
+                    edge_mask = draw_edges(edges, self.edges_det)
+                    edge_image[edge_mask > 0.5] = np.array([255, 0, 255], dtype=np.uint8)
+                    images.append(edge_image)
+                    break
+                continue
+        else:            
+        #if 'mistake' in mode and len(images) == 1:
+            images.append(np.zeros(edge_image.shape, dtype=np.uint8))
+            pass
+        return images, np.array([(np.logical_and(self.predicted_edges[-1] == self.edges_gt, self.edges_gt == 1)).sum(), self.predicted_edges[-1].sum(), self.edges_gt.sum(), int(np.all(self.predicted_edges[-1] == self.edges_gt))])
