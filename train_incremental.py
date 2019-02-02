@@ -33,7 +33,7 @@ parser.add_argument('--data_path', dest='data_path',
                     default='.', type=str)
 parser.add_argument('--corner_type', dest='corner_type',
                     help='corner type for the search algorithm',
-                    default='annots_only', type=str)
+                    default='dets_only', type=str)
 parser.add_argument('--batch_size', dest='batch_size',
                     help='batch size',
                     default=64, type=int)
@@ -77,6 +77,9 @@ if not os.path.exists(options.checkpoint_dir):
     pass
 if not os.path.exists(options.test_dir):
     os.system("mkdir -p %s"%options.test_dir)
+    pass
+if not os.path.exists(options.test_dir + '/cache'):
+    os.system("mkdir -p %s"%options.test_dir + '/cache')
     pass
 
 
@@ -215,11 +218,6 @@ else:
     pass
 
 if options.task == 'search_test':
-    if options.restore == 1:
-        edge_classifier.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(options.num_edges) + '_checkpoint.pth'))
-        edge_classifier.eval()
-        pass
-    
     dset_val = GraphData(options, valid_list, split='val', num_edges=-1)
     searcher = Searcher(options)
     for split, dataset in [('val', dset_val)]:
@@ -254,7 +252,11 @@ for num_edges in all_num_edges:
     elif options.restore == 2 and num_edges > 0:
         edge_classifier.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges - 1) + '_checkpoint.pth'))
         optimizer.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges - 1) + '_optim.pth'))
-        pass
+    elif options.restore == 3:
+        edge_classifier.load_state_dict(torch.load(options.checkpoint_dir.replace('dets_only', 'annots_only') + '/' + str(num_edges) + '_checkpoint.pth'))
+        optimizer.load_state_dict(torch.load(options.checkpoint_dir.replace('dets_only', 'annots_only') + '/' + str(num_edges) + '_optim.pth'))
+        pass        
+    
     if options.num_edges == -1 and os.path.exists(options.checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth'):
         continue
     

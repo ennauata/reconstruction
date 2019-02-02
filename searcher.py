@@ -46,6 +46,7 @@ class Searcher():
 
     def search(self, building, num_edges_target=-1):
         statistics = np.zeros(self.options.max_num_edges + 1, dtype=np.int32)
+        visited_edges = {}
         while True:
             _input, _labels = building.create_samples(mode='inference')
             current_num_edges = building.current_num_edges()
@@ -54,7 +55,12 @@ class Searcher():
                 if 'uniform' in self.options.suffix or 'single' in self.options.suffix:
                     logits = self.edge_classifiers[0](_input)
                 else:
-                    logits = self.edge_classifiers[current_num_edges](_input)
+                    if current_num_edges in self.edge_classifiers:
+                        logits = self.edge_classifiers[current_num_edges](_input)
+                    else:
+                        break
+                        logits = self.edge_classifiers[max(list(self.edge_classifiers.keys()))](_input)
+                        pass
                     pass
                 probs = torch.nn.functional.softmax(logits, dim=-1)
                 probs = probs[:, 1]
@@ -65,6 +71,11 @@ class Searcher():
             if 'single' in self.options.suffix:
                 probs[np.nonzero(building.current_edges())[0]] = 0
                 pass
+            for edge_index, count in visited_edges.items():
+                if count >= 2:
+                    probs[edge_index] = 0
+                    pass
+                continue
             if probs.max() < 0.5:
                 if _labels.max() < 0.5:
                     if current_num_edges < self.options.max_num_edges:
@@ -83,10 +94,15 @@ class Searcher():
                 break
             best_edge = probs.argmax()
             building.update_edge(best_edge)
+            #print(best_edge, _labels[best_edge], building.current_num_edges(), probs.max())
             if current_num_edges < self.options.max_num_edges:
                 statistics[current_num_edges] += _labels[best_edge]
                 pass
             if num_edges_target > 0 and building.current_num_edges() == num_edges_target:
                 break
+            if best_edge not in visited_edges:
+                visited_edges[best_edge] = 0
+                pass
+            visited_edges[best_edge] += 1
             continue
         return statistics
