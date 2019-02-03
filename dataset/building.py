@@ -13,6 +13,12 @@ def draw_edges(edges_on, edges):
         continue
     return im
 
+def draw_edge(edge_index, edges):
+    im = np.zeros((256, 256))
+    edge = edges[edge_index]
+    cv2.line(im, (edge[1], edge[0]), (edge[3], edge[2]), thickness=3, color=1)
+    return im
+
 class Building():
     """Maintain a building to create data examples in the same format"""
 
@@ -67,7 +73,7 @@ class Building():
         edges_embs = np.load(open(edges_embs_path, 'rb'))
 
         # extract edges from corners
-        edges_det_from_corners, ce_assignment, self.graph_edge_index, self.graph_edge_attr = self.extract_edges_from_corners(corners_det, None)
+        edges_det_from_corners, ce_assignment, self.graph_edge_index, self.graph_edge_attr, self.left_edges, self.right_edges = self.extract_edges_from_corners(corners_det, None)
         #e_xys = self.compute_edges_map(edges_det_from_corners)
         # print(edges_det_from_corners)
         # print(e_xys)
@@ -212,7 +218,7 @@ class Building():
         #     pass
         return torch.from_numpy(sample.astype(np.float32)), torch.Tensor([label]).long()
 
-    def create_sample_graph(self):
+    def create_sample_graph(self, load_heatmaps=False):
         """Create one data example:
         edge_index: edge index to flip, -1 for random sampling
         num_edges_source: source graph size, -1 for using the latest
@@ -225,9 +231,19 @@ class Building():
             imgs, corners_det, edges_det = self.imgs, self.corners_det, self.edges_det
             pass
 
-        imgs = imgs.transpose((2, 0, 1)).astype(np.float32) / 255        
+        imgs = imgs.transpose((2, 0, 1)).astype(np.float32) / 255
+        if load_heatmaps:
+            img_c = self.compute_corner_image(corners_det)
+            imgs = np.concatenate([imgs, np.array(img_c)[np.newaxis, :, :]], axis=0)
 
-        return [imgs, corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.graph_edge_index, self.graph_edge_attr]
+            edge_images = []
+            for edge_index in range(len(edges_det)):
+                edge_images.append(draw_edge(edge_index, edges_det))
+                continue
+            edge_images = np.stack(edge_images, axis=0)
+            return [imgs.astype(np.float32), edge_images.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.graph_edge_index, self.graph_edge_attr, self.left_edges.astype(np.int64), self.right_edges.astype(np.int64)]
+        else:
+            return [imgs.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.graph_edge_index, self.graph_edge_attr]        
     
     def update_edge(self, edge_index):
         """Add new prediction"""
@@ -399,19 +415,28 @@ class Building():
             graph_edge_index = []
             pass
         
+        edge_neighbors = [[] for edge_index in range(len(c_e_assignment))]
         if 'sparse' not in self.options.suffix:
             for _, edge_indices in corner_edge_map.items():
                 for edge_index_1, edge_index_2 in itertools.combinations(edge_indices, 2):
                     graph_edge_index.append([edge_index_offset + edge_index_1, edge_index_offset + edge_index_2])
                     graph_edge_index.append([edge_index_offset + edge_index_2, edge_index_offset + edge_index_1])                    
                     continue
+                for edge_index in edge_indices:
+                    edge_neighbors[edge_index].append(edge_indices)
+                    continue
                 continue
             graph_edge_attr = np.concatenate([graph_edge_attr, np.ones((len(graph_edge_index) - len(graph_edge_attr), 1), dtype=np.float32)], axis=0)
             pass
-        
+        left_edges = [np.array([[edge_index, neighbor] for neighbor in neighbors[0]]) for neighbors in edge_neighbors]
+        left_edges = np.concatenate(left_edges, axis=0)
+        left_edges = left_edges[left_edges[:, 0] != left_edges[:, 1]]
+        right_edges = [np.array([[edge_index, neighbor] for neighbor in neighbors[1]]) for neighbors in edge_neighbors]
+        right_edges = np.concatenate(right_edges, axis=0)
+        right_edges = right_edges[right_edges[:, 0] != right_edges[:, 1]]
         graph_edge_index = np.array(graph_edge_index)
         
-        return e_from_corners, c_e_assignment, graph_edge_index.transpose(), graph_edge_attr
+        return e_from_corners, c_e_assignment, graph_edge_index.transpose(), graph_edge_attr, left_edges, right_edges
 
     def compute_dists(self, corners_det, edges_det, c_e_assignment, thresh=2.0):
 
@@ -658,12 +683,16 @@ class Building():
         #print(corners)
         return imgs, corners, edges
 
-    def visualize(self, mode='last_mistake'):
+    def visualize(self, mode='last_mistake', edge_state=None):
         image = self.imgs        
         corner_image = self.compute_corner_image(self.corners_det)
         image[corner_image > 0.5] = np.array([255, 0, 0], dtype=np.uint8)
         edge_image = image.copy()
-        edge_mask = draw_edges(self.predicted_edges[-1], self.edges_det)
+        if 'last' in mode:
+            edge_mask = draw_edges(self.predicted_edges[-1], self.edges_det)
+        else:
+            edge_mask = draw_edges(edge_state, self.edges_det)
+            pass
         edge_image[edge_mask > 0.5] = np.array([255, 0, 255], dtype=np.uint8)
         images = [edge_image]
         if 'mistake' in mode:
