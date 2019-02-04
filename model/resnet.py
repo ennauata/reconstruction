@@ -285,7 +285,7 @@ class ResNetBatch(nn.Module):
         self.inplanes = planes * block.expansion
 
         for _ in range(1, blocks):
-            if _ == blocks - 1 and 'graph' in self.options.suffix:
+            if _ == blocks - 1 and 'sharing' in self.options.suffix:
                 layers.append(block(self.inplanes, planes // 4))
             else:
                 layers.append(block(self.inplanes, planes))
@@ -310,7 +310,7 @@ class ResNetBatch(nn.Module):
         x = self.relu(x)
         x = self.maxpool(x)
 
-        if 'graph' in self.options.suffix:
+        if 'sharing' in self.options.suffix:
             x = self.layer1(x)
             x = self.aggregate(x, left_edges, right_edges)
             x = self.layer2(x)
@@ -364,4 +364,86 @@ def create_model(options):
             continue
         model.load_state_dict(state)
         pass
-    return model    
+    return model
+
+class GraphModelCustom(nn.Module):
+    def __init__(self, options):
+        super(GraphModelCustom, self).__init__()
+        self.layer_1 = nn.Sequential(nn.Linear(4, 16), nn.BatchNorm1d(16), nn.ReLU())
+        self.layer_2 = nn.Sequential(nn.Linear(64, 32), nn.BatchNorm1d(32), nn.ReLU())
+        self.layer_3 = nn.Sequential(nn.Linear(128, 64), nn.BatchNorm1d(64), nn.ReLU())
+        self.layer_4 = nn.Sequential(nn.Linear(256, 128), nn.BatchNorm1d(128), nn.ReLU())
+
+        self.inplanes = 16
+        block = BasicBlock
+        layers = [3, 4, 6, 3]
+        self.image_layer_0 = nn.Sequential(nn.Conv2d(4, 16, kernel_size=7, stride=2, padding=3,
+                                                     bias=False),
+                                           nn.BatchNorm2d(16),
+                                           nn.ReLU(inplace=True),
+                                           nn.MaxPool2d(kernel_size=3, stride=2, padding=1))
+        self.image_layer_1 = self._make_layer(block, 16, layers[0])
+        self.image_layer_2 = self._make_layer(block, 32, layers[1], stride=2)
+        self.image_layer_3 = self._make_layer(block, 64, layers[2], stride=2)
+        self.image_layer_4 = self._make_layer(block, 128, layers[3], stride=2)        
+        self.connection_pred = nn.Sequential(nn.Linear(512, 64), nn.ReLU(), nn.Linear(64, 1))
+
+        self.num_edge_points = 8
+        return
+
+    def image_features(self, image_x, connections):
+        width = image_x.shape[3]
+        height = image_x.shape[3]
+        x_1 = connections[:, 1:2] * width
+        x_2 = connections[:, 3:4] * width
+        y_1 = connections[:, 0:1] * height
+        y_2 = connections[:, 2:3] * height
+        alphas = (torch.arange(self.num_edge_points).float() / (self.num_edge_points - 1)).cuda()
+        xs = torch.round(x_1 + (x_2 - x_1) * alphas).long()
+        ys = torch.round(y_1 + (y_2 - y_1) * alphas).long()
+        features = image_x[0, :, ys, xs]
+        return features.mean(-1).transpose(1, 0)
+    
+    def aggregate(self, x, left_edges, right_edges, image_x, connections):
+        left_x = torch.zeros(x.shape).cuda()
+        left_x.index_add_(0, left_edges[:, 0], x[left_edges[:, 1]])
+        right_x = torch.zeros(x.shape).cuda()
+        right_x.index_add_(0, right_edges[:, 0], x[right_edges[:, 1]])
+        global_x = self.image_features(image_x, connections)
+        # global_x[:] = x.sum(0)
+        x = torch.cat([x, left_x, right_x, global_x], dim=1)
+        return x
+
+    def _make_layer(self, block, planes, blocks, stride=1):
+        downsample = None
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                conv1x1(self.inplanes, planes * block.expansion, stride),
+                nn.BatchNorm2d(planes * block.expansion),
+            )
+
+        layers = []
+        layers.append(block(self.inplanes, planes, stride, downsample))
+        self.inplanes = planes * block.expansion
+
+        for _ in range(1, blocks):
+            layers.append(block(self.inplanes, planes))
+            continue
+
+        return nn.Sequential(*layers)
+    
+    def forward(self, image, connections, left_edges, right_edges):
+        image_x_1 = self.image_layer_1(self.image_layer_0(image))
+        image_x_2 = self.image_layer_2(image_x_1)
+        image_x_3 = self.image_layer_3(image_x_2)
+        image_x_4 = self.image_layer_4(image_x_3)                        
+        x = self.layer_1(connections)
+        x = self.aggregate(x, left_edges, right_edges, image_x_1, connections)
+        x = self.layer_2(x)
+        x = self.aggregate(x, left_edges, right_edges, image_x_2, connections)            
+        x = self.layer_3(x)
+        x = self.aggregate(x, left_edges, right_edges, image_x_3, connections)            
+        x = self.layer_4(x)
+        x = self.aggregate(x, left_edges, right_edges, image_x_4, connections)            
+        connection_pred = self.connection_pred(x)
+        return torch.sigmoid(connection_pred).view(-1)

@@ -23,14 +23,18 @@ from tqdm import tqdm
 from utils.utils import tileImages
 from validator import Validator
 from options import parse_args
-from model.resnet import create_model
+from model.resnet import create_model, GraphModelCustom
 
 
 def main(options):
     ##############################################################################################################
     ############################################### Define Model #################################################
     ##############################################################################################################
-    model = create_model(options)
+    if 'graph' in options.suffix:
+        model = GraphModelCustom(options)
+    else:
+        model = create_model(options)
+        pass
     model = model.cuda()
     model = model.train()
 
@@ -127,13 +131,17 @@ def main(options):
                 im_arr, edge_images, corners, connections, corner_gt, connection_gt, edge_index, edge_attr, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(), sample[9].cuda().squeeze(), sample[10].squeeze().item()
 
                 #print('num edges', len(connection_gt))
-                if len(connection_gt) > 150:
-                    continue
-                image_inp = torch.cat([im_arr.unsqueeze(0).repeat((len(edge_images), 1, 1, 1)), edge_images.unsqueeze(1)], dim=1)
-                #connection_confidence = validator.validate(dset_train.buildings[building_index])
-                #connections = torch.cat([connections, connection_confidence.unsqueeze(-1)], dim=-1)
 
-                connection_pred = model(image_inp, left_edges, right_edges)
+                if 'graph' in options.suffix:
+                    connection_pred = model(im_arr.unsqueeze(0), connections, left_edges, right_edges)
+                else:
+                    if len(connection_gt) > 200:
+                        continue
+                    if len(connection_gt) > 100 and 'sharing' in options.suffix:
+                        continue                
+                    image_inp = torch.cat([im_arr.unsqueeze(0).repeat((len(edge_images), 1, 1, 1)), edge_images.unsqueeze(1)], dim=1)
+                    connection_pred = model(image_inp, left_edges, right_edges)
+                    pass
 
                 #corner_loss = F.binary_cross_entropy(corner_pred, corner_gt) * 0
                 connection_loss = F.binary_cross_entropy(connection_pred, connection_gt)
@@ -197,15 +205,20 @@ def testOneEpoch(options, model, dataset, visualize=False):
     for sample_index, sample in enumerate(data_iterator):
         im_arr, edge_images, corners, connections, corner_gt, connection_gt, edge_index, edge_attr, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(0), sample[9].cuda().squeeze(), sample[10].squeeze().item()
 
-        if len(connection_gt) > 150:
-            continue
-        print(len(connection_gt))
-        image_inp = torch.cat([im_arr.unsqueeze(0).repeat((len(edge_images), 1, 1, 1)), edge_images.unsqueeze(1)], dim=1)
         #connection_confidence = validator.validate(dset_train.buildings[building_index])
         #connections = torch.cat([connections, connection_confidence.unsqueeze(-1)], dim=-1)
 
-        connection_pred = model(image_inp, left_edges, right_edges)
-
+        if 'graph' in options.suffix:
+            connection_pred = model(im_arr.unsqueeze(0), connections, left_edges, right_edges)
+        else:
+            if len(connection_gt) > 200:
+                continue
+            if len(connection_gt) > 100 and 'sharing' in options.suffix:
+                continue                
+            image_inp = torch.cat([im_arr.unsqueeze(0).repeat((len(edge_images), 1, 1, 1)), edge_images.unsqueeze(1)], dim=1)
+            connection_pred = model(image_inp, left_edges, right_edges)
+            pass
+        
         #corner_loss = F.binary_cross_entropy(corner_pred, corner_gt) * 0
         connection_loss = F.binary_cross_entropy(connection_pred, connection_gt)
         losses = [connection_loss]
