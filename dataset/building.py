@@ -5,6 +5,8 @@ from PIL import Image, ImageDraw
 import torch
 import cv2
 import itertools
+from scipy.spatial.distance import cdist
+from scipy.optimize import linear_sum_assignment
 
 def draw_edges(edges_on, edges):
     im = np.zeros((256, 256))
@@ -79,7 +81,7 @@ class Building():
         # print(e_xys)
         # print(corners_det)
         # match compute true/false samples for detections
-        corners_gt, edges_gt = self.compute_gt(corners_det, edges_det_from_corners, corners_annot, edges_annot, placeholder=False)
+        corners_gt, edges_gt = self.compute_gt(corners_det, corners_annot, edges_det_from_corners, edges_annot)
         #exit(1)
 
         inds = np.load(edges_embs_path.replace('edges_feats', 'filters'))[1, :]
@@ -106,7 +108,9 @@ class Building():
         self.generate_bins = False
         self.num_edges = len(self.edges_gt)
         self.num_edges_gt = self.edges_gt.sum()
-        
+        self.corners_annot = corners_annot
+        self.edges_annot = edges_annot
+
         if options.suffix != '':
             suffix = '_' + options.corner_type + '_' + options.suffix
         else:
@@ -142,7 +146,7 @@ class Building():
         samples = []
         labels = []
         for edge_index in range(self.num_edges):
-            sample, label = self.create_sample(edge_index, num_edges_source, mode=mode)
+            sample, label, _ = self.create_sample(edge_index, num_edges_source, mode=mode)
             samples.append(sample)
             labels.append(label)
             continue
@@ -216,7 +220,7 @@ class Building():
         #     bin_sample = np.concatenate([curr_bin_state, new_bin_state])
         #     sample = np.concatenate([sample, bin_sample], axis=0)
         #     pass
-        return torch.from_numpy(sample.astype(np.float32)), torch.Tensor([label]).long()
+        return torch.from_numpy(sample.astype(np.float32)), torch.Tensor([label]).long(), torch.Tensor([edges_det[edge_index].astype(np.float32)])
 
     def create_sample_graph(self, load_heatmaps=False):
         """Create one data example:
@@ -559,73 +563,91 @@ class Building():
         return corner_set, edge_set
 
 
-    def compute_gt(self, corners_det, edges_det, corners_annot, edges_annot, max_dist=8.0, shape=256, placeholder=False):
+        return new+rot_center
+
+    def compute_gt(self, corners_det, corners_annot, edges_det_from_corners, edges_annot, max_dist=16.0, shape=256):
 
         # init
         corners_det = np.array(corners_det)
-        edges_det = np.array(edges_det)
         corners_annot = np.array(corners_annot)
-        edges_annot = np.array(edges_annot)
 
         gt_c = np.zeros(corners_det.shape[0])
-        gt_e = np.zeros(edges_det.shape[0])
-        tg_to_gt_c = np.zeros(corners_annot.shape[0])-1
-        tg_to_gt_e = np.zeros(edges_annot.shape[0])-1
+        gt_e = np.zeros(edges_det_from_corners.shape[0])
 
-        if not placeholder:
+        # load ground-truth
+        c_annots = corners_annot[:, :2]
 
-            # load ground-truth
-            y1, x1 = corners_annot[:, 0], corners_annot[:, 1]
-            y1, x1 = x1[:, np.newaxis], y1[:, np.newaxis]
+        # load detections
+        c_dets = corners_det[:, :2]
 
-            # load detections
-            y2, x2 = corners_det[:, 0], corners_det[:, 1]
-            y2, x2 = x2[:, np.newaxis], y2[:, np.newaxis]
+        # assign corner detection with annotation minimize linear sum assignment
+        assigned_corners_ = []
+        dist = cdist(c_annots, c_dets)
+        annots_idx, dets_idx = linear_sum_assignment(dist)
 
-            # select closest corner
-            dist = np.sqrt((x1 - x2.transpose(1, 0))**2 + (y1 - y2.transpose(1, 0))**2)
-            ind = np.argmin(dist, axis=1)
-            d_min = np.min(dist, axis=1)
+        # apply threshold
+        assignment_filtered = []
+        for i, j in zip(annots_idx, dets_idx):
+            if dist[i, j] < max_dist:
+                assignment_filtered.append((i, j))
 
-            for k in range(np.max(ind)+1):
-                pos = np.where(k == ind)
-                min_vals = d_min[pos]
-                if min_vals.shape[0] > 0 and np.min(min_vals) < 2*max_dist:
-                    l = np.argmin(min_vals)
-                    tg_to_gt_c[pos[0][l]] = k
-            
-            for k, val in zip(ind, d_min):
-                if val < 2*max_dist:
-                    gt_c[k] = 1
+        # get edges enpoints to corner dets mapping
+        edges_inds_dets = []
+        for e in edges_det_from_corners:
+            y1, x1, y2, x2 = e
+            inds = []
+            for k, c in enumerate(corners_det):
+                y3, x3, _, _ = c
+                if (x1 == x3) and (y1 == y3):
+                    inds.append(k)
+                elif (x2 == x3) and (y2 == y3):
+                    inds.append(k)
+            edges_inds_dets.append(inds)
+        edges_inds_dets = np.array(edges_inds_dets)
 
-            # select closest edges
-            y1, x1, y2, x2 = np.split(edges_annot, 4, axis=-1)
-            y3, x3, y4, x4 = np.split(edges_det, 4, axis=-1)
+        # get edges enpoints to corner dets mapping
+        edges_inds_annots = []
+        for e in edges_annot:
+            y1, x1, y2, x2 = e
+            inds = []
+            for k, c in enumerate(corners_annot):
+                y3, x3, _, _ = c
+                if (x1 == x3) and (y1 == y3):
+                    inds.append(k)
+                elif (x2 == x3) and (y2 == y3):
+                    inds.append(k)
+            edges_inds_annots.append(inds)
+        edges_inds_annots = np.array(edges_inds_annots)
 
-            dist13 = np.sqrt((x1 - x3.transpose(1, 0))**2 + (y1 - y3.transpose(1, 0))**2)
-            dist14 = np.sqrt((x1 - x4.transpose(1, 0))**2 + (y1 - y4.transpose(1, 0))**2)
-            dist23 = np.sqrt((x2 - x3.transpose(1, 0))**2 + (y2 - y3.transpose(1, 0))**2)
-            dist24 = np.sqrt((x2 - x4.transpose(1, 0))**2 + (y2 - y4.transpose(1, 0))**2)
-            
-            d1 = dist13 + dist24
-            d2 = dist14 + dist23
-            d_comb = np.stack([d1, d2], axis=-1)
-            d_comb = np.min(d_comb, axis=-1)
-            ind = np.argmin(d_comb, axis=-1)
-            d_min = np.min(d_comb, axis=-1)
+        # get corners gt
+        corner_map_det_to_annot = {}
+        for (i, j) in assignment_filtered:
+            corner_map_det_to_annot[j] = i
+            gt_c[j] = 1
 
-            for k in range(np.max(ind)+1):
-                pos = np.where(k == ind)
-                min_vals = d_min[pos]
-                if min_vals.shape[0] > 0 and np.min(min_vals) < max_dist*4:
-                    l = np.argmin(min_vals)
-                    tg_to_gt_e[pos[0][l]] = k
+        # import matplotlib.pyplot as plt
+        # deb_im = Image.new("RGB", (256, 256))
+        # draw = ImageDraw.Draw(deb_im)
+        # for i in dets_idx:
+        #     y, x = c_dets[i]
+        #     if gt_c[i] == 1:
+        #         draw.ellipse((x-2, y-2, x+2, y+2), fill='green')
+        # plt.imshow(deb_im)
+        # plt.show()
 
-            for k, val in zip(ind, d_min):
-                if val < max_dist*4:
-                    gt_e[k] = 1
+        # get edges gt 
+        for k, e_det in enumerate(edges_inds_dets):
+            det_i, det_j = e_det
+            if (gt_c[det_i] == 1) and (gt_c[det_j] == 1):
+                annot_i = corner_map_det_to_annot[det_i] 
+                annot_j = corner_map_det_to_annot[det_j] 
+                for e_annot in edges_inds_annots:
+                    m, n = e_annot
+                    if ((m == annot_i) and (n == annot_j)) or((n == annot_i) and (m == annot_j)):
+                        gt_e[k] = 1
 
-        return gt_c, gt_e    
+        return gt_c, gt_e
+ 
 
     def rotate_coords(self, image_shape, xy, angle):
         org_center = (image_shape-1)/2.
@@ -683,8 +705,8 @@ class Building():
         #print(corners)
         return imgs, corners, edges
 
-    def visualize(self, mode='last_mistake', edge_state=None):
-        image = self.imgs        
+    def visualize(self, mode='last_mistake', edge_state=None, building_idx=None):
+        image = self.imgs.copy()        
         corner_image = self.compute_corner_image(self.corners_det)
         image[corner_image > 0.5] = np.array([255, 0, 0], dtype=np.uint8)
         edge_image = image.copy()
@@ -710,4 +732,16 @@ class Building():
                 images.append(np.zeros(edge_image.shape, dtype=np.uint8))
                 pass
             pass
+
+        if 'draw_annot' in mode:    
+            corner_annot = self.compute_corner_image(np.array(self.corners_annot).astype('int'))
+            corner_image_annot = self.imgs.copy()
+            corner_image_annot[corner_annot > 0.5] = np.array([255, 0, 0], dtype=np.uint8)
+            images.append(corner_image_annot)
+
+            edge_image_annot = corner_image_annot.copy()
+            edge_mask = draw_edges(np.ones(self.edges_annot.shape[0]), np.array(self.edges_annot.astype('int')))
+            edge_image_annot[edge_mask > 0.5] = np.array([255, 0, 255], dtype=np.uint8)
+            images.append(edge_image_annot)
+
         return images, np.array([(np.logical_and(self.predicted_edges[-1] == self.edges_gt, self.edges_gt == 1)).sum(), self.predicted_edges[-1].sum(), self.edges_gt.sum(), int(np.all(self.predicted_edges[-1] == self.edges_gt))])
