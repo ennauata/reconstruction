@@ -11,6 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from dataset.graph_dataloader import GraphData
+from dataset.shuffle_dataloader import ShuffleData
 from torch.utils.data import DataLoader
 from model.graph_model import GraphModel
 from dataset.collate import PadCollate
@@ -101,6 +102,7 @@ def main(options):
 
 
         dset_train = GraphData(options, train_list, num_edges=num_edges, load_heatmaps=True)
+            
         #train_loader = DataLoader(dset_train, batch_size=64, shuffle=True, num_workers=1, collate_fn=PadCollate())
 
         if options.task == 'search':
@@ -217,9 +219,9 @@ def testOneEpoch(options, model, dataset, visualize=False):
         if 'graph' in options.suffix:
             connection_pred = model(im_arr.unsqueeze(0), connections, left_edges, right_edges)
         else:
-            if len(connection_gt) > 200:
-                continue
-            if len(connection_gt) > 100 and 'sharing' in options.suffix:
+            if len(connection_gt) > 150 or (len(connection_gt) > 100 and 'sharing' in options.suffix):
+                #all_images.append(np.zeros((256, 256, 3), dtype=np.uint8))
+                #all_images.append(np.zeros((256, 256, 3), dtype=np.uint8))                
                 continue                
             image_inp = torch.cat([im_arr.unsqueeze(0).repeat((len(edge_images), 1, 1, 1)), edge_images.unsqueeze(1)], dim=1)
             connection_pred = model(image_inp, left_edges, right_edges)
