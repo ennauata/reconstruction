@@ -582,10 +582,7 @@ class Building():
 
         return corner_set, edge_set
 
-
-        return new+rot_center
-
-    def compute_gt(self, corners_det, corners_annot, edges_det_from_corners, edges_annot, max_dist=16.0, shape=256):
+    def compute_gt(self, corners_det, corners_annot, edges_det_from_corners, edges_annot, max_dist=10.0, shape=256):
 
         # init
         corners_det = np.array(corners_det)
@@ -603,7 +600,8 @@ class Building():
         # assign corner detection with annotation minimize linear sum assignment
         assigned_corners_ = []
         dist = cdist(c_annots, c_dets)
-        annots_idx, dets_idx = linear_sum_assignment(dist)
+
+        annots_idx, dets_idx = np.arange(dist.shape[0]), np.argmin(dist, -1)
 
         # apply threshold
         assignment_filtered = []
@@ -644,16 +642,6 @@ class Building():
         for (i, j) in assignment_filtered:
             corner_map_det_to_annot[j] = i
             gt_c[j] = 1
-
-        # import matplotlib.pyplot as plt
-        # deb_im = Image.new("RGB", (256, 256))
-        # draw = ImageDraw.Draw(deb_im)
-        # for i in dets_idx:
-        #     y, x = c_dets[i]
-        #     if gt_c[i] == 1:
-        #         draw.ellipse((x-2, y-2, x+2, y+2), fill='green')
-        # plt.imshow(deb_im)
-        # plt.show()
 
         # get edges gt 
         for k, e_det in enumerate(edges_inds_dets):
