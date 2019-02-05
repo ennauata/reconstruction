@@ -53,10 +53,11 @@ def main(options):
     with open('{}/building_reconstruction/la_dataset_new/train_list_prime.txt'.format(PREFIX)) as f:
         file_list = [line.strip() for line in f.readlines()]
         train_list = file_list[:-50]
-        valid_list = file_list[-50:]
+        #valid_list = file_list[-50:]
         pass
-    #with open('{}/building_reconstruction/la_dataset_new/valid_list.txt'.format(PREFIX)) as f:
-    #valid_list = [line.strip() for line in f.readlines()]
+
+    with open('{}/building_reconstruction/la_dataset_new/valid_list.txt'.format(PREFIX)) as f:
+        valid_list = [line.strip() for line in f.readlines()]
 
     best_score = 0.0
     mt = Metrics()
@@ -87,12 +88,14 @@ def main(options):
         dset_val = GraphData(options, valid_list, split='val', num_edges=num_edges, load_heatmaps=True)
 
         if options.task == 'test':
-            testOneEpoch(options, model, dset_val)
+            with torch.no_grad():
+                testOneEpoch(options, model, dset_val)
             exit(1)
             pass
         
         if options.task == 'visualize':
-            testOneEpoch(options, model, dset_val, visualize=True)
+            with torch.no_grad():
+                testOneEpoch(options, model, dset_val, visualize=True)
             exit(1)
             pass
 
@@ -118,7 +121,7 @@ def main(options):
             pass
 
 
-        for epoch in range(100):
+        for epoch in range(10):
             #os.system('rm ' + options.test_dir + '/' + str(num_edges) + '_*')
             dset_train.reset()
             train_loader = DataLoader(dset_train, batch_size=1, shuffle=True, num_workers=1)    
@@ -187,7 +190,10 @@ def main(options):
             #     pass
             torch.save(model.state_dict(), options.checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth')
             torch.save(optimizer.state_dict(), options.checkpoint_dir + '/' + str(num_edges) + '_optim.pth')
-            testOneEpoch(options, model, dset_val)        
+
+            with torch.no_grad():
+                testOneEpoch(options, model, dset_val) 
+
             continue
         continue
     return
@@ -247,18 +253,20 @@ def testOneEpoch(options, model, dataset, visualize=False):
             index_offset = sample_index % 500
             building = dataset.buildings[building_index]
             building.reset()
-            images, _ = building.visualize(mode='', edge_state=connection_pred)                            
+            images, _ = building.visualize(mode='draw_annot', edge_state=connection_pred, building_idx=building_index)                            
             if sample_index % 500 < 16:
                 cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_image.png', images[0])
                 pass
-            row_images.append(images[0])            
+            row_images.append(images[0])      
             building.reset()
-            images, _ = building.visualize(mode='', edge_state=connection_gt)                            
+            images, _ = building.visualize(mode='draw_annot', edge_state=connection_gt, building_idx=building_index)                            
             if sample_index % 500 < 16:
                 cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_input.png', images[0])
                 pass
             row_images.append(images[0])
-            if len(row_images) == 10:
+            row_images.append(images[1])
+            row_images.append(images[2]) 
+            if len(row_images) == 12:
                 all_images.append(row_images)
                 row_images = []
                 pass
