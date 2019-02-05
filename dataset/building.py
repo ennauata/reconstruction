@@ -243,7 +243,27 @@ class Building():
             edge_images = np.stack(edge_images, axis=0)
             return [imgs.astype(np.float32), edge_images.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.graph_edge_index, self.graph_edge_attr, self.left_edges.astype(np.int64), self.right_edges.astype(np.int64)]
         else:
-            return [imgs.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.graph_edge_index, self.graph_edge_attr]        
+            return [imgs.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.graph_edge_index, self.graph_edge_attr]
+
+    def create_sample_edge(self, edge_index, load_heatmaps=False):
+        """Create one data example:
+        edge_index: edge index to flip, -1 for random sampling
+        num_edges_source: source graph size, -1 for using the latest
+        """
+        #assert(num_edges_source < len(self.predicted_edges))
+
+        if self.with_augmentation:
+            imgs, corners_det, edges_det = self.augment(self.imgs.copy(), self.corners_det, self.edges_det)
+        else:
+            imgs, corners_det, edges_det = self.imgs, self.corners_det, self.edges_det
+            pass
+
+        imgs = imgs.transpose((2, 0, 1)).astype(np.float32) / 255
+        img_c = self.compute_corner_image(corners_det)
+        imgs = np.concatenate([imgs, np.array(img_c)[np.newaxis, :, :]], axis=0)
+
+        edge_image = draw_edge(edge_index, edges_det)
+        return [imgs.astype(np.float32), edge_image.astype(np.float32), self.edges_gt[edge_index]]
     
     def update_edge(self, edge_index):
         """Add new prediction"""
