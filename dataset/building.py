@@ -582,7 +582,7 @@ class Building():
 
         return corner_set, edge_set
 
-    def compute_gt(self, corners_det, corners_annot, edges_det_from_corners, edges_annot, max_dist=10.0, shape=256):
+    def compute_gt(self, corners_det, corners_annot, edges_det_from_corners, edges_annot, max_dist=8.0, shape=256):
 
         # init
         corners_det = np.array(corners_det)
@@ -602,6 +602,7 @@ class Building():
         dist = cdist(c_annots, c_dets)
 
         annots_idx, dets_idx = np.arange(dist.shape[0]), np.argmin(dist, -1)
+        #annots_idx, dets_idx = np.argmin(dist, 0), np.arange(dist.shape[1])
 
         # apply threshold
         assignment_filtered = []
@@ -640,20 +641,22 @@ class Building():
         # get corners gt
         corner_map_det_to_annot = {}
         for (i, j) in assignment_filtered:
-            corner_map_det_to_annot[j] = i
+            if j in corner_map_det_to_annot:
+                corner_map_det_to_annot[j].append(i)
+            else:
+                corner_map_det_to_annot[j] = [i]
             gt_c[j] = 1
 
         # get edges gt 
         for k, e_det in enumerate(edges_inds_dets):
             det_i, det_j = e_det
             if (gt_c[det_i] == 1) and (gt_c[det_j] == 1):
-                annot_i = corner_map_det_to_annot[det_i] 
-                annot_j = corner_map_det_to_annot[det_j] 
-                for e_annot in edges_inds_annots:
-                    m, n = e_annot
-                    if ((m == annot_i) and (n == annot_j)) or((n == annot_i) and (m == annot_j)):
-                        gt_e[k] = 1
-
+                for annot_i in corner_map_det_to_annot[det_i]:
+                    for annot_j in corner_map_det_to_annot[det_j]: 
+                        for e_annot in edges_inds_annots:
+                            m, n = e_annot
+                            if ((m == annot_i) and (n == annot_j)) or((n == annot_i) and (m == annot_j)):
+                                gt_e[k] = 1
         return gt_c, gt_e
  
 
