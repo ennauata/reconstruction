@@ -763,6 +763,23 @@ class Building():
 
         return images, np.array([(np.logical_and(self.predicted_edges[-1] == self.edges_gt, self.edges_gt == 1)).sum(), self.predicted_edges[-1].sum(), self.edges_gt.sum(), int(np.all(self.predicted_edges[-1] == self.edges_gt))])
 
+    def colinear_edges(self):
+        colinear_edges = []
+        dot_threshold = np.cos(np.deg2rad(20))
+        for corner_index in range(len(self.corner_edge)):
+            corner = self.corners_det[corner_index]
+            edge_indices = self.corner_edge[corner_index].nonzero()[0].tolist()
+            for edge_index_1, edge_index_2 in itertools.combinations(edge_indices, 2):
+                direction_1 = self.edges_det[edge_index_1].reshape((2, 2)).mean(0) - corner
+                direction_2 = self.edges_det[edge_index_2].reshape((2, 2)).mean(0) - corner
+                if np.dot(direction_1, direction_2) / (np.linalg.norm(direction_1) * np.linalg.norm(direction_2)) > dot_threshold:
+                    colinear_edges.append([edge_index_1, edge_index_2])
+                    pass
+                continue
+            continue
+        colinear_edges = np.array(colinear_edges)
+        return colinear_edges
+        
     def post_processing(self, edge_confidence, debug=False):
         corner_edge = self.corner_edge > 0.5
         num_corners = len(corner_edge)
@@ -778,13 +795,21 @@ class Building():
         edge_corner = np.array(list(edge_corner.values()))
         
         edge_state = edge_confidence > 0.5
-        
+        colinear_edges = self.colinear_edges()
+        for edge_pair in colinear_edges:
+            for c in range(2):
+                if edge_state[edge_pair[c]] and not edge_state[edge_pair[1 - c]]:
+                    edge_confidence[edge_pair[1 - c]] = min(edge_confidence[edge_pair[1 - c]], 1 - edge_confidence[edge_pair[c]])
+                    pass
+                continue
+            continue
+        colinear_edges = {(edge_pair.min(), edge_pair.max()): True for edge_pair in colinear_edges}
         valid_corner_neighbors = [{} for _ in range(num_corners)]
         invalid_corner_neighbors = [{} for _ in range(num_corners)]        
         for edge_index, (corner_pair, confidence) in enumerate(zip(edge_corner, edge_confidence)):
             if confidence > 0.5:
-                valid_corner_neighbors[corner_pair[0]][corner_pair[1]] = 0.5 - confidence
-                valid_corner_neighbors[corner_pair[1]][corner_pair[0]] = 0.5 - confidence
+                valid_corner_neighbors[corner_pair[0]][corner_pair[1]] = (0.5 - confidence, edge_index)
+                valid_corner_neighbors[corner_pair[1]][corner_pair[0]] = (0.5 - confidence, edge_index)
             else:
                 invalid_corner_neighbors[corner_pair[0]][corner_pair[1]] = (0.5 - confidence, edge_index)
                 invalid_corner_neighbors[corner_pair[1]][corner_pair[0]] = (0.5 - confidence, edge_index)
@@ -836,20 +861,22 @@ class Building():
 
             #visited_corner_mask = np.zeros(num_corners, np.bool)
             for corner_index in range(num_corners):
-                corner_paths = [[[corner_index, neighbor], distance] for neighbor, distance in valid_corner_neighbors[corner_index].items() if distance <= corner_path_distances[corner_index, neighbor]]
+                corner_paths = [[[corner_index, neighbor], distance, [edge_index]] for neighbor, (distance, edge_index) in valid_corner_neighbors[corner_index].items() if distance <= corner_path_distances[corner_index, neighbor]]
                 while len(corner_paths) > 0:
                     corner_path = corner_paths[0]
                     corner_paths = corner_paths[1:]
                     #print(corner_path)
-                    for neighbor, distance in valid_corner_neighbors[corner_path[0][-1]].items():
+                    for neighbor, (distance, edge_index) in valid_corner_neighbors[corner_path[0][-1]].items():
                         if neighbor in corner_path[0]:
+                            continue
+                        if (min(edge_index, corner_path[2][-1]), max(edge_index, corner_path[2][-1])) in colinear_edges:
                             continue
                         new_distance = corner_path[1] + distance
                         #print(corner_index, neighbor, new_distance, corner_path_distances[corner_index, neighbor])
                         if new_distance / (len(corner_path[0]) + 1) <= corner_path_distances[corner_index, neighbor] / len(corner_path[0]):
                             corner_path_distances[corner_index, neighbor] = new_distance
                             corner_path_lengths[corner_index, neighbor] = len(corner_path[0])
-                            new_corner_path = [corner_path[0] + [neighbor], new_distance]
+                            new_corner_path = [corner_path[0] + [neighbor], new_distance, corner_path[2] + [edge_index]]
                             corner_paths.append(new_corner_path)
                             pass
                         continue
@@ -863,7 +890,6 @@ class Building():
         #mean_path_distances = (path_distances[0] * path_lengths[0] + path_distances[1] * path_lengths[1]) / np.maximum(path_distances[0] + path_lengths[1], 1)
 
         mean_path_distances = path_distances[0] + path_distances[1] / path_lengths[1]
-
         
         mean_path_distances[np.diag(np.ones(len(mean_path_distances), dtype=np.bool))] = 100
 
@@ -878,65 +904,138 @@ class Building():
             print('neighbor', corner_neighbor)
             pass
         
-        corner_edge_state = corner_edge * edge_state
-        corner_degrees = corner_edge_state.sum(-1)
         #valid_corners = corner_degrees > 0
         #valid_corner_mask = corner_degrees >= 2
         #valid_edge_mask = np.logical_and(np.logical_and(valid_corner_mask[edge_corner[:, 0]], valid_corner_mask[edge_corner[:, 1]]), edge_state)
-        
-        singular_corners = (corner_degrees == 1).nonzero()[0]
 
         corner_pairs = []
-        invalid_corner_indices = []        
-        for corner_index in singular_corners:
-            target = corner_neighbor[corner_index]
-            if target < 0 or target == corner_index:
-                invalid_corner_indices.append(corner_index)
+        invalid_corner_indices = []
+        while True:
+            corner_edge_state = corner_edge * edge_state        
+            corner_degrees = corner_edge_state.sum(-1)        
+            singular_corners = (corner_degrees == 1).nonzero()[0].tolist()
+            if len(singular_corners) == 0:
+                break
+            for corner_index in singular_corners:
+                target = corner_neighbor[corner_index]
+                if target < 0 or target == corner_index:
+                    invalid_corner_indices.append(corner_index)
+                    continue
+                if debug:
+                    print('target', corner_index, target)
+                    pass
+                corner_paths = [[[corner_index, neighbor], distance] for neighbor, (distance, _) in invalid_corner_neighbors[corner_index].items()]
+                corner_paths = sorted(corner_paths, key=lambda x: x[1])
+                while len(corner_paths) > 0:
+                    corner_path = corner_paths[0]
+                    corner_paths = corner_paths[1:]
+                    if corner_path[0][-1] == target:
+                        if debug:
+                            print('path', corner_path)
+                            pass
+                        for index in range(len(corner_path[0]) - 1):
+                            corner_pairs.append((corner_path[0][index], corner_path[0][index + 1]))
+                            continue
+                        break
+                    for neighbor, (distance, _) in invalid_corner_neighbors[corner_path[0][-1]].items():
+                        if neighbor in corner_path[0]:
+                            continue
+                        new_corner_path = [corner_path[0] + [neighbor], corner_path[1] + distance]
+                        inserted = False
+                        for index in range(len(corner_paths)):
+                            if corner_paths[index][1] > new_corner_path[1]:
+                                corner_paths = corner_paths[:index] + [new_corner_path] + corner_paths[index:]
+                                inserted = True
+                                break
+                            continue
+                        if not inserted:
+                            corner_paths += [new_corner_path]
+                            pass
+                        continue
+                    continue
                 continue
             if debug:
-                print('target', corner_index, target)
+                print('results', corner_pairs, invalid_corner_indices)
                 pass
-            corner_paths = [[[corner_index, neighbor], distance] for neighbor, (distance, _) in invalid_corner_neighbors[corner_index].items()]
-            corner_paths = sorted(corner_paths, key=lambda x: x[1])
-            while len(corner_paths) > 0:
-                corner_path = corner_paths[0]
-                corner_paths = corner_paths[1:]
-                if corner_path[0][-1] == target:
-                    if debug:
-                        print('path', corner_path)
-                        pass
-                    for index in range(len(corner_path[0]) - 1):
-                        corner_pairs.append((corner_path[0][index], corner_path[0][index + 1]))
-                        continue
-                    break
-                for neighbor, (distance, _) in invalid_corner_neighbors[corner_path[0][-1]].items():
-                    if neighbor in corner_path[0]:
-                        continue
-                    new_corner_path = [corner_path[0] + [neighbor], corner_path[1] + distance]
-                    inserted = False
-                    for index in range(len(corner_paths)):
-                        if corner_paths[index][1] > new_corner_path[1]:
-                            corner_paths = corner_paths[:index] + [new_corner_path] + corner_paths[index:]
-                            inserted = True
-                            break
-                        continue
-                    if not inserted:
-                        corner_paths += [new_corner_path]
+            new_edge_state = edge_state.copy()
+            for corner_pair in corner_pairs:
+                edge_index = invalid_corner_neighbors[corner_pair[0]][corner_pair[1]][1]
+                new_edge_state[edge_index] = 1
+                continue
+            for invalid_corner_index in invalid_corner_indices:
+                #for _, (_, edge_index) in corner_neighbors[invalid_corner_index].items():
+                new_edge_state[corner_edge[invalid_corner_index]] = 0
+                continue
+            if np.all(edge_state == new_edge_state):
+                break            
+            print(edge_state, new_edge_state)
+            edge_state = new_edge_state
+            continue
+        return edge_state
+    
+    ## Find closed loop inside the graph
+    def compute_edge_groups(self, corner_pair_edge_map, edges_gt):
+        corner_neighbors_map = {}
+        for corner_pair, edge_index in corner_pair_edge_map.items():
+            if edges_gt[edge_index] < 0.5:
+                continue
+            for c in range(2):
+                if corner_pair[c] not in corner_neighbors_map:
+                    corner_neighbors_map[corner_pair[c]] = []
+                    pass
+                corner_neighbors_map[corner_pair[c]].append(corner_pair[1 - c])
+                continue
+            continue
+        
+        corner_groups = []
+        visited_corners = {}
+        for corner_index in corner_neighbors_map.keys():
+            if corner_index in visited_corners:
+                continue
+            visited_corners[corner_index] = True
+            queue = [(corner_index, [corner_index])]
+            while len(queue) > 0:
+                element = queue[0]
+                queue = queue[1:]
+                neighbors = corner_neighbors_map[element[0]]
+                for neighbor in neighbors:
+                    visited_corners[neighbor] = True
+                    if neighbor in element[1]:
+                        index = element[1].index(neighbor)
+                        if len(element[1]) - index >= 3:
+                            corner_groups.append(element[1][index:])
+                            pass
+                    else:
+                        queue.append((neighbor, element[1] + [neighbor]))
                         pass
                     continue
                 continue
             continue
-        if debug:
-            print('results', corner_pairs, invalid_corner_indices)
-            pass
-        new_edge_state = edge_state.copy()
-        for corner_pair in corner_pairs:
-            edge_index = invalid_corner_neighbors[corner_pair[0]][corner_pair[1]][1]
-            new_edge_state[edge_index] = 1
+        
+        edge_groups = []
+        valid_corner_groups = []
+        for corner_group in corner_groups:
+            edge_group = []
+            for corner_index_1 in corner_group:
+                for corner_index_2 in corner_group:
+                    if corner_index_2 <= corner_index_1:
+                        continue
+                    edge_group.append(corner_pair_edge_map[(corner_index_1, corner_index_2)])
+                    continue
+                continue
+            edge_group = np.array(edge_group)
+            num_edges_gt = edges_gt[edge_group].sum()
+            ## The number of edges equals to the number of corners for a closed loop
+            if num_edges_gt == len(corner_group):
+                corner_group = np.array(corner_group)
+                reverse_corner_group = corner_group.copy()
+                reverse_corner_group[1:] = reverse_corner_group[1:][::-1]
+                exists = len(valid_corner_groups) > 0 and max([np.all(group == reverse_corner_group) for group in valid_corner_groups])
+                if not exists:
+                    edge_groups.append(edge_group)
+                    valid_corner_groups.append(corner_group)
+                    pass
+                pass
             continue
-        for invalid_corner_index in invalid_corner_indices:
-            #for _, (_, edge_index) in corner_neighbors[invalid_corner_index].items():
-            new_edge_state[corner_edge[invalid_corner_index]] = 0
-            continue
-        return new_edge_state
-    
+
+        return edge_groups
