@@ -717,7 +717,7 @@ class Building():
         #print(corners)
         return imgs, corners, edges
 
-    def visualize(self, mode='last_mistake', edge_state=None, building_idx=None):
+    def visualize(self, mode='last_mistake', edge_state=None, building_idx=None, post_processing=False):
         image = self.imgs.copy()        
         corner_image = self.compute_corner_image(self.corners_det)
         image[corner_image > 0.5] = np.array([255, 0, 0], dtype=np.uint8)
@@ -725,6 +725,11 @@ class Building():
         if 'last' in mode:
             edge_mask = draw_edges(self.predicted_edges[-1], self.edges_det)
         else:
+            if post_processing:
+                edge_state = self.post_processing(edge_state)
+            else:
+                edge_state = edge_state > 0.5
+                pass
             edge_mask = draw_edges(edge_state, self.edges_det)
             pass
         edge_image[edge_mask > 0.5] = np.array([255, 0, 255], dtype=np.uint8)
@@ -758,72 +763,180 @@ class Building():
 
         return images, np.array([(np.logical_and(self.predicted_edges[-1] == self.edges_gt, self.edges_gt == 1)).sum(), self.predicted_edges[-1].sum(), self.edges_gt.sum(), int(np.all(self.predicted_edges[-1] == self.edges_gt))])
 
-    def post_processing(self, edge_confidence):
+    def post_processing(self, edge_confidence, debug=False):
         corner_edge = self.corner_edge > 0.5
         num_corners = len(corner_edge)
         num_edges = len(edge_confidence)
         edge_corner = {}
-        for conrer_index, edge_index in np.nonzero(corner_edge):
+        corner_indices, edge_indices = np.nonzero(corner_edge)
+        for corner_index, edge_index in zip(corner_indices, edge_indices):
             if edge_index not in edge_corner:
                 edge_corner[edge_index] = []
                 pass
             edge_corner[edge_index].append(corner_index)
             continue
-        print(edge_corner.keys())
-        edge_corner = np.array(edge_corner.values())
-        print(edge_corner.shape)
-        exit(1)
+        edge_corner = np.array(list(edge_corner.values()))
         
         edge_state = edge_confidence > 0.5
-
-        ## Compute the shortest path between any pair of corners (not passing chosen edges)
-        corner_pair_distances = np.full((num_corners, num_corners), fill_value=100)
-        for edge_index in range(num_edges):
-            if not edge_state[edge_index]:
-                distance = 1 - edge_confidence[edge_index]
-                corner_pair_distances[edge_corner[edge_index][0], edge_corner[edge_index][1]] = distance
-                corner_pair_distances[edge_corner[edge_index][1], edge_corner[edge_index][0]] = distance
+        
+        valid_corner_neighbors = [{} for _ in range(num_corners)]
+        invalid_corner_neighbors = [{} for _ in range(num_corners)]        
+        for edge_index, (corner_pair, confidence) in enumerate(zip(edge_corner, edge_confidence)):
+            if confidence > 0.5:
+                valid_corner_neighbors[corner_pair[0]][corner_pair[1]] = 0.5 - confidence
+                valid_corner_neighbors[corner_pair[1]][corner_pair[0]] = 0.5 - confidence
+            else:
+                invalid_corner_neighbors[corner_pair[0]][corner_pair[1]] = (0.5 - confidence, edge_index)
+                invalid_corner_neighbors[corner_pair[1]][corner_pair[0]] = (0.5 - confidence, edge_index)
                 pass
-            continue
-        corner_nearest_neighbors = []
-        while True:
-            corner_nearest_neighbor = corner_pair_distances.argmin(-1)
-            new_corner_pair_distances = np.mimumum(corner_pair_distances, distances.min(-1, keepdims=True) + corner_pair_distances[corner_nearest_neighbor])
-            corner_nearest_neighbors.append(corner_nearest_neighbor)            
-            if np.all(new_corner_pair_distances == corner_pair_distances):
-                break
-            continue
-
-        ## Compute the path with the maximum mean confidence between any pair of corners (passing chosen edges)
-        corner_pair_distances = np.zeros((num_corners, num_corners))
-        for edge_index in range(num_edges):
-            if edge_state[edge_index]:
-                distance = edge_confidence[edge_index]
-                corner_pair_distances[edge_corner[edge_index][0], edge_corner[edge_index][1]] = distance
-                corner_pair_distances[edge_corner[edge_index][1], edge_corner[edge_index][0]] = distance
-                pass
-            continue
-        corner_furthest_neighbors = []
-        while True:
-            corner_furthest_neighbor = corner_distances.argmax(-1)
-            corner_furthest_neighbors.append(corner_furthest_neighbor)                        
-            iteration = len(corner_furthest_neighbors)
-            
-            new_corner_pair_distances = np.maximum(corner_pair_distances, (corner_pair_distances.max(-1, keepdims=True) * iteration + distances[corner_nearest_neighbor]) / (iteration + 1))
-            if np.all(new_corner_pair_distances == corner_pair_distances):
-                break
             continue
         
-        corner_edge_state = edge_state[corner_edge]
+        ## Compute two paths between any pair of corners, one passing through chosen edges and one doesn't
+        path_distances = []
+        path_lengths = []
+        for _ in range(1):
+            corner_path_distances = np.full((num_corners, num_corners), fill_value=100.0)
+            corner_path_lengths = np.zeros((num_corners, num_corners))
+            for edge_index in range(num_edges):
+                if not edge_state[edge_index]:
+                    distance = 0.5 - edge_confidence[edge_index]
+                    corner_path_distances[edge_corner[edge_index][0], edge_corner[edge_index][1]] = distance
+                    corner_path_distances[edge_corner[edge_index][1], edge_corner[edge_index][0]] = distance
+                    corner_path_lengths[edge_corner[edge_index][0], edge_corner[edge_index][1]] = 1
+                    corner_path_lengths[edge_corner[edge_index][1], edge_corner[edge_index][0]] = 1
+                    pass
+                continue
+            while True:
+                corner_neighbor = corner_path_distances.argmin(-1)
+                new_corner_path_distances = np.minimum(corner_path_distances, corner_path_distances.min(-1, keepdims=True) + corner_path_distances[corner_neighbor])
+                #corner_nearest_neighbors.append(corner_nearest_neighbor)
+
+                changed_mask = new_corner_path_distances < corner_path_distances
+                changed_mask[np.diag(np.ones(len(changed_mask), dtype=np.bool))] = False
+                if not np.any(changed_mask):
+                    break
+                corner_path_lengths[changed_mask] = (corner_path_lengths[np.arange(num_corners, dtype=np.int32), corner_neighbor] + np.ones(corner_path_lengths.shape))[changed_mask]
+                corner_path_distances = new_corner_path_distances
+                continue
+            path_distances.append(corner_path_distances)
+            path_lengths.append(corner_path_lengths)            
+            continue
+        for _ in range(1):
+            corner_path_distances = np.full((num_corners, num_corners), fill_value=100.0)
+            corner_path_lengths = np.zeros((num_corners, num_corners))
+            for edge_index in range(num_edges):
+                if edge_state[edge_index]:
+                    distance = 0.5 - edge_confidence[edge_index]
+                    corner_path_distances[edge_corner[edge_index][0], edge_corner[edge_index][1]] = distance
+                    corner_path_distances[edge_corner[edge_index][1], edge_corner[edge_index][0]] = distance
+                    corner_path_lengths[edge_corner[edge_index][0], edge_corner[edge_index][1]] = 1
+                    corner_path_lengths[edge_corner[edge_index][1], edge_corner[edge_index][0]] = 1
+                    pass
+                continue
+
+            #visited_corner_mask = np.zeros(num_corners, np.bool)
+            for corner_index in range(num_corners):
+                corner_paths = [[[corner_index, neighbor], distance] for neighbor, distance in valid_corner_neighbors[corner_index].items() if distance <= corner_path_distances[corner_index, neighbor]]
+                while len(corner_paths) > 0:
+                    corner_path = corner_paths[0]
+                    corner_paths = corner_paths[1:]
+                    #print(corner_path)
+                    for neighbor, distance in valid_corner_neighbors[corner_path[0][-1]].items():
+                        if neighbor in corner_path[0]:
+                            continue
+                        new_distance = corner_path[1] + distance
+                        #print(corner_index, neighbor, new_distance, corner_path_distances[corner_index, neighbor])
+                        if new_distance / (len(corner_path[0]) + 1) <= corner_path_distances[corner_index, neighbor] / len(corner_path[0]):
+                            corner_path_distances[corner_index, neighbor] = new_distance
+                            corner_path_lengths[corner_index, neighbor] = len(corner_path[0])
+                            new_corner_path = [corner_path[0] + [neighbor], new_distance]
+                            corner_paths.append(new_corner_path)
+                            pass
+                        continue
+                    continue
+                continue                
+            path_distances.append(corner_path_distances)
+            path_lengths.append(corner_path_lengths)
+            continue
+
+        ## The optimal corner to connect
+        #mean_path_distances = (path_distances[0] * path_lengths[0] + path_distances[1] * path_lengths[1]) / np.maximum(path_distances[0] + path_lengths[1], 1)
+
+        mean_path_distances = path_distances[0] + path_distances[1] / path_lengths[1]
+
+        
+        mean_path_distances[np.diag(np.ones(len(mean_path_distances), dtype=np.bool))] = 100
+
+        corner_neighbor = mean_path_distances.argmin(-1)
+        corner_neighbor[mean_path_distances.min(-1) > 0] = -1
+
+        if debug:
+            print(edge_corner[edge_state])
+            print(path_distances)
+            print(path_lengths)            
+            print(path_distance)                
+            print('neighbor', corner_neighbor)
+            pass
+        
+        corner_edge_state = corner_edge * edge_state
         corner_degrees = corner_edge_state.sum(-1)
         #valid_corners = corner_degrees > 0
-        valid_corner_mask = corner_degrees >= 2
-        valid_edge_mask = np.logical_and(np.logical_and(valid_corner_mask[edge_corner[:, 0]], valid_corner_mask[edge_corner[:, 1]]), edge_state)
+        #valid_corner_mask = corner_degrees >= 2
+        #valid_edge_mask = np.logical_and(np.logical_and(valid_corner_mask[edge_corner[:, 0]], valid_corner_mask[edge_corner[:, 1]]), edge_state)
         
-        
-        singular_corners = (corner_degrees == 1).nonzero()
-            
-        for corner_index in singular_corners:
-            neighbor_corners = corner_index
+        singular_corners = (corner_degrees == 1).nonzero()[0]
 
-            
+        corner_pairs = []
+        invalid_corner_indices = []        
+        for corner_index in singular_corners:
+            target = corner_neighbor[corner_index]
+            if target < 0 or target == corner_index:
+                invalid_corner_indices.append(corner_index)
+                continue
+            if debug:
+                print('target', corner_index, target)
+                pass
+            corner_paths = [[[corner_index, neighbor], distance] for neighbor, (distance, _) in invalid_corner_neighbors[corner_index].items()]
+            corner_paths = sorted(corner_paths, key=lambda x: x[1])
+            while len(corner_paths) > 0:
+                corner_path = corner_paths[0]
+                corner_paths = corner_paths[1:]
+                if corner_path[0][-1] == target:
+                    if debug:
+                        print('path', corner_path)
+                        pass
+                    for index in range(len(corner_path[0]) - 1):
+                        corner_pairs.append((corner_path[0][index], corner_path[0][index + 1]))
+                        continue
+                    break
+                for neighbor, (distance, _) in invalid_corner_neighbors[corner_path[0][-1]].items():
+                    if neighbor in corner_path[0]:
+                        continue
+                    new_corner_path = [corner_path[0] + [neighbor], corner_path[1] + distance]
+                    inserted = False
+                    for index in range(len(corner_paths)):
+                        if corner_paths[index][1] > new_corner_path[1]:
+                            corner_paths = corner_paths[:index] + [new_corner_path] + corner_paths[index:]
+                            inserted = True
+                            break
+                        continue
+                    if not inserted:
+                        corner_paths += [new_corner_path]
+                        pass
+                    continue
+                continue
+            continue
+        if debug:
+            print('results', corner_pairs, invalid_corner_indices)
+            pass
+        new_edge_state = edge_state.copy()
+        for corner_pair in corner_pairs:
+            edge_index = invalid_corner_neighbors[corner_pair[0]][corner_pair[1]][1]
+            new_edge_state[edge_index] = 1
+            continue
+        for invalid_corner_index in invalid_corner_indices:
+            #for _, (_, edge_index) in corner_neighbors[invalid_corner_index].items():
+            new_edge_state[corner_edge[invalid_corner_index]] = 0
+            continue
+        return new_edge_state
+    

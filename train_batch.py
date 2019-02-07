@@ -31,6 +31,23 @@ def main(options):
     ##############################################################################################################
     ############################################### Define Model #################################################
     ##############################################################################################################
+
+    if False:
+        from dataset.building import Building
+        building = Building(options, '1525562852.02', with_augmentation=False, corner_type='annots_only')
+        edge_state = building.edges_gt.astype(np.float32)
+        edge_state[1] = 0.3
+        edge_state[2] = 0.3
+        edge_state[3] = 0.6
+        edge_state[4] = 0.6    
+        print(edge_state)
+        edge_state = building.post_processing(edge_state)
+        print(edge_state)
+        images, _ = building.visualize(mode='', edge_state=edge_state)
+        cv2.imwrite('test/image.png', images[0])
+        exit(1)
+        pass
+    
     if 'graph' in options.suffix:
         model = GraphModelCustom(options)
     else:
@@ -246,7 +263,7 @@ def testOneEpoch(options, model, dataset, additional_models, visualize=False):
             continue
         data_iterator.set_description(status)
 
-        connection_pred = connection_pred.detach().cpu().numpy() > 0.5
+        connection_pred = connection_pred.detach().cpu().numpy()
         connection_gt = connection_gt.detach().cpu().numpy() > 0.5
         statistics[0] += np.logical_and(connection_pred == 1, connection_gt == 1).sum()
         statistics[1] += np.logical_and(connection_pred == 0, connection_gt == 1).sum()                  
@@ -258,23 +275,32 @@ def testOneEpoch(options, model, dataset, additional_models, visualize=False):
         if sample_index % 500 < 16 or visualize:
             index_offset = sample_index % 500
             building = dataset.buildings[building_index]
-            images, _ = building.visualize(mode='draw_annot', edge_state=connection_pred, building_idx=building_index)                            
-            if sample_index % 500 < 16:
-                cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_image.png', images[0])
-                pass
-            row_images.append(images[0])
-            
+
             images, _ = building.visualize(mode='draw_annot', edge_state=connection_gt, building_idx=building_index)                            
             if sample_index % 500 < 16:
                 cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_input.png', images[0])
                 pass
             row_images.append(images[0])
+            
+            images, _ = building.visualize(mode='draw_annot', edge_state=connection_pred, building_idx=building_index, post_processing=False)                            
+            if sample_index % 500 < 16:
+                cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_image.png', images[0])
+                pass
+            row_images.append(images[0])
+            if visualize:
+                images, _ = building.visualize(mode='draw_annot', edge_state=connection_pred, building_idx=building_index, post_processing=True)                            
+                row_images.append(images[0])
+                pass
 
             for additional_model in additional_models:
                 connection_pred = additional_model(image_inp, left_edges, right_edges)
-                connection_pred = connection_pred.detach().cpu().numpy() > 0.5
-                images, _ = building.visualize(mode='draw_annot', edge_state=connection_pred, building_idx=building_index)
-                row_images.append(images[0])                
+                connection_pred = connection_pred.detach().cpu().numpy()
+                images, _ = building.visualize(mode='draw_annot', edge_state=connection_pred, building_idx=building_index, post_processing=False)
+                row_images.append(images[0])
+                if visualize:
+                    images, _ = building.visualize(mode='draw_annot', edge_state=connection_pred, building_idx=building_index, post_processing=True)
+                    row_images.append(images[0])
+                    pass
                 continue
             #row_images.append(images[1])
             #row_images.append(images[2]) 
