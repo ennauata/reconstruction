@@ -8,7 +8,10 @@ def parse_args():
                         default='.', type=str)
     parser.add_argument('--corner_type', dest='corner_type',
                         help='corner type for the search algorithm',
-                        default='annots_only', type=str)
+                        default='dets_only', type=str)
+    parser.add_argument('--testing_corner_type', dest='testing_corner_type',
+                        help='testing corner type for the search algorithm',
+                        default='dets_only', type=str)
     parser.add_argument('--batch_size', dest='batch_size',
                         help='batch size',
                         default=16, type=int)
@@ -20,7 +23,7 @@ def parse_args():
                         default=10000, type=int)
     parser.add_argument('--num_testing_images', dest='num_testing_images',
                         help='num testing images',
-                        default=200, type=int)
+                        default=-1, type=int)
     parser.add_argument('--restore', dest='restore',
                         help='restore',
                         default=1, type=int)

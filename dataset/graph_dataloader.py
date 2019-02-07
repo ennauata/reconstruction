@@ -29,15 +29,24 @@ class GraphData(Dataset):
             pass                
         self.buildings = []
         for _id in id_list:
-            building = Building(options, _id, with_augmentation=split == 'train')
-            if 'uniform' not in options.suffix and 'single' not in options.suffix:            
-                if num_edges > building.current_num_edges():
-                    continue
-                elif num_edges < building.current_num_edges() and num_edges >= 0:
-                    building.reset(num_edges)
-                    pass
+            corner_types = []
+            if 'dets' in options.corner_type:
+                corner_types.append('dets_only')
                 pass
-            self.buildings.append(building)
+            if 'annots' in options.corner_type:
+                corner_types.append('annots_only')
+                pass
+            for corner_type in corner_types:
+                building = Building(options, _id, with_augmentation=split == 'train', corner_type=corner_type)
+                if 'uniform' not in options.suffix and 'single' not in options.suffix:            
+                    if num_edges > building.current_num_edges():
+                        continue
+                    elif num_edges < building.current_num_edges() and num_edges >= 0:
+                        building.reset(num_edges)
+                        pass
+                    pass
+                self.buildings.append(building)
+                pass
             if len(self.buildings) >= self.num_images:
                 break
             continue

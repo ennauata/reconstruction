@@ -54,11 +54,10 @@ def main(options):
     with open('{}/building_reconstruction/la_dataset_new/train_list_prime.txt'.format(PREFIX)) as f:
         file_list = [line.strip() for line in f.readlines()]
         train_list = file_list[:-50]
-        #valid_list = file_list[-50:]
+        valid_list = file_list[-50:]
         pass
-
-    with open('{}/building_reconstruction/la_dataset_new/valid_list.txt'.format(PREFIX)) as f:
-        valid_list = [line.strip() for line in f.readlines()]
+    #with open('{}/building_reconstruction/la_dataset_new/valid_list.txt'.format(PREFIX)) as f:
+    #valid_list = [line.strip() for line in f.readlines()]
 
     best_score = 0.0
     mt = Metrics()
@@ -89,23 +88,17 @@ def main(options):
         dset_val = GraphData(options, valid_list, split='val', num_edges=num_edges, load_heatmaps=True)
 
         if options.task == 'test':
-            with torch.no_grad():
-                testOneEpoch(options, model, dset_val)
+            testOneEpoch(options, model, dset_val)
             exit(1)
             pass
         
         if options.task == 'visualize':
-            with torch.no_grad():
-                annotation_model = create_model(options)
-                annotation_model = annotation_model.cuda()
-                annotation_model.load_state_dict(torch.load(options.checkpoint_dir.replace(options.corner_type, 'annots_only') + '/' + str(num_edges) + '_checkpoint.pth'))
-                testOneEpoch(options, model, dset_val, [annotation_model], visualize=True)
-                pass
+            testOneEpoch(options, model, dset_val, visualize=True)
             exit(1)
             pass
 
 
-        dset_train = GraphData(options, train_list, num_edges=num_edges, load_heatmaps=True)
+        dset_train = ShuffleData(options, train_list, num_edges=num_edges, load_heatmaps=True)
             
         #train_loader = DataLoader(dset_train, batch_size=64, shuffle=True, num_workers=1, collate_fn=PadCollate())
 
@@ -127,17 +120,17 @@ def main(options):
             pass
 
 
-        for epoch in range(10):
+        for epoch in range(100):
             #os.system('rm ' + options.test_dir + '/' + str(num_edges) + '_*')
             dset_train.reset()
-            train_loader = DataLoader(dset_train, batch_size=1, shuffle=True, num_workers=1)    
+            train_loader = DataLoader(dset_train, batch_size=options.batch_size, shuffle=True, num_workers=1)    
             epoch_losses = []
             ## Same with train_loader but provide progress bar
             data_iterator = tqdm(train_loader, total=len(dset_train))
             optimizer.zero_grad()        
             for sample_index, sample in enumerate(data_iterator):
 
-                im_arr, edge_images, corners, connections, corner_gt, connection_gt, edge_index, edge_attr, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(), sample[9].cuda().squeeze(), sample[10].squeeze().item()
+                im_arr, edge_images, connection_gt, building_indices, edge_indices = sample[0].cuda(), sample[1].cuda(), sample[2].cuda(), sample[3].numpy(), sample[4].numpy()
 
                 #print('num edges', len(connection_gt))
 
@@ -147,43 +140,46 @@ def main(options):
                     if len(connection_gt) > 200:
                         continue
                     if len(connection_gt) > 100 and 'sharing' in options.suffix:
-                        continue                
-                    image_inp = torch.cat([im_arr.unsqueeze(0).repeat((len(edge_images), 1, 1, 1)), edge_images.unsqueeze(1)], dim=1)
-                    connection_pred = model(image_inp, left_edges, right_edges)
+                        continue
+                    image_inp = torch.cat([im_arr, edge_images.unsqueeze(1)], dim=1)
+                    connection_pred = model(image_inp)
                     pass
 
                 #corner_loss = F.binary_cross_entropy(corner_pred, corner_gt) * 0
-                connection_loss = F.binary_cross_entropy(connection_pred, connection_gt)
+                connection_loss = F.binary_cross_entropy(connection_pred, connection_gt.float())
                 losses = [connection_loss]
 
                 loss = sum(losses)        
 
                 loss.backward()
 
-                if (sample_index + 1) % options.batch_size == 0:
-                    ## Progress bar
-                    loss_values = [l.data.item() for l in losses]
-                    epoch_losses.append(loss_values)
-                    status = str(epoch + 1) + ' loss: '
-                    for l in loss_values:
-                        status += '%0.5f '%l
-                        continue
-                    data_iterator.set_description(status)
 
-                    optimizer.step()
-                    optimizer.zero_grad()
-                    pass
+                loss_values = [l.data.item() for l in losses]
+                epoch_losses.append(loss_values)
+                status = str(epoch + 1) + ' loss: '
+                for l in loss_values:
+                    status += '%0.5f '%l
+                    continue
+                data_iterator.set_description(status)
+
+                optimizer.step()
+                optimizer.zero_grad()
 
                 if sample_index % 1000 < 16:
                     index_offset = sample_index % 1000
-                    building = dset_train.buildings[building_index]
-                    building.reset()
+                    batch_index = 0
+                    building = dset_train.buildings[building_indices[batch_index]]
+                    #building.reset()
                     #building.update_edges(connection_pred.detach().cpu().numpy() > 0.5)
-                    images, _ = building.visualize(mode='', edge_state=connection_pred.detach().cpu().numpy() > 0.5)
+                    edge_state = np.zeros(building.num_edges, dtype=np.int32)
+                    edge_state[edge_indices[batch_index]] = connection_pred[batch_index].detach().cpu().numpy() > 0.5
+                    images, _ = building.visualize(mode='', edge_state=edge_state)
                     cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_image.png', images[0])
-                    building.reset()
+                    #building.reset()
                     #building.update_edges(connection_confidence.detach().cpu().numpy() > 0.5)
-                    images, _ = building.visualize(mode='', edge_state=connection_gt.detach().cpu().numpy() > 0.5)
+                    #edge_state[edge_indices[batch_index]] = connection_gt[batch_index].detach().cpu().numpy() > 0.5
+                    edge_state[edge_indices[batch_index]] = 1
+                    images, _ = building.visualize(mode='', edge_state=edge_state)
                     cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_input.png', images[0])
                     pass
                 continue
@@ -196,15 +192,12 @@ def main(options):
             #     pass
             torch.save(model.state_dict(), options.checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth')
             torch.save(optimizer.state_dict(), options.checkpoint_dir + '/' + str(num_edges) + '_optim.pth')
-
-            with torch.no_grad():
-                testOneEpoch(options, model, dset_val) 
-
+            testOneEpoch(options, model, dset_val)        
             continue
         continue
     return
 
-def testOneEpoch(options, model, dataset, additional_models, visualize=False):
+def testOneEpoch(options, model, dataset, visualize=False):
     #model.eval()
     
     epoch_losses = []
@@ -258,27 +251,19 @@ def testOneEpoch(options, model, dataset, additional_models, visualize=False):
         if sample_index % 500 < 16 or visualize:
             index_offset = sample_index % 500
             building = dataset.buildings[building_index]
-            images, _ = building.visualize(mode='draw_annot', edge_state=connection_pred, building_idx=building_index)                            
+            building.reset()
+            images, _ = building.visualize(mode='', edge_state=connection_pred)                            
             if sample_index % 500 < 16:
                 cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_image.png', images[0])
                 pass
-            row_images.append(images[0])
-            
-            images, _ = building.visualize(mode='draw_annot', edge_state=connection_gt, building_idx=building_index)                            
+            row_images.append(images[0])            
+            building.reset()
+            images, _ = building.visualize(mode='', edge_state=connection_gt)                            
             if sample_index % 500 < 16:
                 cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_input.png', images[0])
                 pass
             row_images.append(images[0])
-
-            for additional_model in additional_models:
-                connection_pred = additional_model(image_inp, left_edges, right_edges)
-                connection_pred = connection_pred.detach().cpu().numpy() > 0.5
-                images, _ = building.visualize(mode='draw_annot', edge_state=connection_pred, building_idx=building_index)
-                row_images.append(images[0])                
-                continue
-            #row_images.append(images[1])
-            #row_images.append(images[2]) 
-            if len(row_images) >= 10:
+            if len(row_images) == 10:
                 all_images.append(row_images)
                 row_images = []
                 pass
@@ -319,7 +304,7 @@ def visualizeExample(options, im, label_pred, label_gt, confidence=1, prefix='',
 
 if __name__ == '__main__':
     args = parse_args()
-    args.keyname = 'batch'
+    args.keyname = 'shuffle'
     args.keyname += '_' + args.corner_type
     if args.suffix != '':
         args.keyname += '_' + args.suffix

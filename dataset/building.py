@@ -24,20 +24,21 @@ def draw_edge(edge_index, edges):
 class Building():
     """Maintain a building to create data examples in the same format"""
 
-    def __init__(self, options, _id, with_augmentation=True):
+    def __init__(self, options, _id, with_augmentation=True, corner_type='dets_only'):
         self.options = options
+        self.with_augmentation = with_augmentation
+
         PREFIX = options.data_path
         LADATA_FOLDER = '{}/building_reconstruction/la_dataset_new/'.format(PREFIX)
         ANNOTS_FOLDER = '{}/building_reconstruction/la_dataset_new/annots'.format(PREFIX)
-        EDGES_FOLDER = '{}/building_reconstruction/la_dataset_new/expanded_primitives_{}/edges'.format(PREFIX, options.corner_type)
-        CORNERS_FOLDER = '{}/building_reconstruction/la_dataset_new/expanded_primitives_{}/corners'.format(PREFIX, options.corner_type)
+        EDGES_FOLDER = '{}/building_reconstruction/la_dataset_new/expanded_primitives_{}/edges'.format(PREFIX, corner_type)
+        CORNERS_FOLDER = '{}/building_reconstruction/la_dataset_new/expanded_primitives_{}/corners'.format(PREFIX, corner_type)
         
         self.annots_folder = ANNOTS_FOLDER
         self.edges_folder = EDGES_FOLDER
         self.corners_folder = CORNERS_FOLDER
         self.dataset_folder = LADATA_FOLDER
         self._id = _id
-        self.with_augmentation = with_augmentation
         
         # annots
         annot_path = os.path.join(self.annots_folder, _id +'.npy')
@@ -104,7 +105,7 @@ class Building():
         self.edges_det = np.round(edges_det_from_corners).astype(np.int32)
         #self.e_xys = e_xys
         self.ce_angles_bins = ce_angles_bins
-        self.corner_edge = edges_det_from_corners
+        self.corner_edge = corner_edge
         self.generate_bins = False
         self.num_edges = len(self.edges_gt)
         self.num_edges_gt = self.edges_gt.sum()
@@ -112,9 +113,9 @@ class Building():
         self.edges_annot = edges_annot
 
         if options.suffix != '':
-            suffix = '_' + options.corner_type + '_' + options.suffix
+            suffix = '_' + corner_type + '_' + options.suffix
         else:
-            suffix = '_' + options.corner_type
+            suffix = '_' + corner_type
             pass
         self.prediction_path = self.options.test_dir + '/cache/' + self._id + '.npy'
         if os.path.exists(self.prediction_path):
@@ -756,3 +757,73 @@ class Building():
             images.append(edge_image_annot)
 
         return images, np.array([(np.logical_and(self.predicted_edges[-1] == self.edges_gt, self.edges_gt == 1)).sum(), self.predicted_edges[-1].sum(), self.edges_gt.sum(), int(np.all(self.predicted_edges[-1] == self.edges_gt))])
+
+    def post_processing(self, edge_confidence):
+        corner_edge = self.corner_edge > 0.5
+        num_corners = len(corner_edge)
+        num_edges = len(edge_confidence)
+        edge_corner = {}
+        for conrer_index, edge_index in np.nonzero(corner_edge):
+            if edge_index not in edge_corner:
+                edge_corner[edge_index] = []
+                pass
+            edge_corner[edge_index].append(corner_index)
+            continue
+        print(edge_corner.keys())
+        edge_corner = np.array(edge_corner.values())
+        print(edge_corner.shape)
+        exit(1)
+        
+        edge_state = edge_confidence > 0.5
+
+        ## Compute the shortest path between any pair of corners (not passing chosen edges)
+        corner_pair_distances = np.full((num_corners, num_corners), fill_value=100)
+        for edge_index in range(num_edges):
+            if not edge_state[edge_index]:
+                distance = 1 - edge_confidence[edge_index]
+                corner_pair_distances[edge_corner[edge_index][0], edge_corner[edge_index][1]] = distance
+                corner_pair_distances[edge_corner[edge_index][1], edge_corner[edge_index][0]] = distance
+                pass
+            continue
+        corner_nearest_neighbors = []
+        while True:
+            corner_nearest_neighbor = corner_pair_distances.argmin(-1)
+            new_corner_pair_distances = np.mimumum(corner_pair_distances, distances.min(-1, keepdims=True) + corner_pair_distances[corner_nearest_neighbor])
+            corner_nearest_neighbors.append(corner_nearest_neighbor)            
+            if np.all(new_corner_pair_distances == corner_pair_distances):
+                break
+            continue
+
+        ## Compute the path with the maximum mean confidence between any pair of corners (passing chosen edges)
+        corner_pair_distances = np.zeros((num_corners, num_corners))
+        for edge_index in range(num_edges):
+            if edge_state[edge_index]:
+                distance = edge_confidence[edge_index]
+                corner_pair_distances[edge_corner[edge_index][0], edge_corner[edge_index][1]] = distance
+                corner_pair_distances[edge_corner[edge_index][1], edge_corner[edge_index][0]] = distance
+                pass
+            continue
+        corner_furthest_neighbors = []
+        while True:
+            corner_furthest_neighbor = corner_distances.argmax(-1)
+            corner_furthest_neighbors.append(corner_furthest_neighbor)                        
+            iteration = len(corner_furthest_neighbors)
+            
+            new_corner_pair_distances = np.maximum(corner_pair_distances, (corner_pair_distances.max(-1, keepdims=True) * iteration + distances[corner_nearest_neighbor]) / (iteration + 1))
+            if np.all(new_corner_pair_distances == corner_pair_distances):
+                break
+            continue
+        
+        corner_edge_state = edge_state[corner_edge]
+        corner_degrees = corner_edge_state.sum(-1)
+        #valid_corners = corner_degrees > 0
+        valid_corner_mask = corner_degrees >= 2
+        valid_edge_mask = np.logical_and(np.logical_and(valid_corner_mask[edge_corner[:, 0]], valid_corner_mask[edge_corner[:, 1]]), edge_state)
+        
+        
+        singular_corners = (corner_degrees == 1).nonzero()
+            
+        for corner_index in singular_corners:
+            neighbor_corners = corner_index
+
+            
