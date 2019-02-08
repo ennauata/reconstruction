@@ -271,26 +271,23 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
             continue
         data_iterator.set_description(status)
 
-<<<<<<< HEAD
         connections = connections.detach().cpu().numpy() * 256.0
         lengths = np.sqrt((connections[:, 0] - connections[:, 2])**2 + (connections[:, 1] - connections[:, 3])**2)
         lengths = lengths.astype('int32')
 
-        connection_pred = connection_pred.detach().cpu().numpy() > 0.5
-=======
         connection_pred = connection_pred.detach().cpu().numpy()
->>>>>>> 7a132a1fa0936bd4d347a18745965f67aac6fc13
+
         connection_gt = connection_gt.detach().cpu().numpy() > 0.5
-        statistics[0] += np.logical_and(connection_pred == 1, connection_gt == 1).sum()
-        statistics[1] += np.logical_and(connection_pred == 0, connection_gt == 1).sum()                  
-        statistics[2] += np.logical_and(connection_pred == 1, connection_gt == 0).sum()                  
-        statistics[3] += np.logical_and(connection_pred == 0, connection_gt == 0).sum()
+        statistics[0] += np.logical_and(connection_pred > 0.5, connection_gt == 1).sum()
+        statistics[1] += np.logical_and(connection_pred < 0.5, connection_gt == 1).sum()                  
+        statistics[2] += np.logical_and(connection_pred > 0.5, connection_gt == 0).sum()                  
+        statistics[3] += np.logical_and(connection_pred < 0.5, connection_gt == 0).sum()
         statistics[4] += np.all(connection_pred == connection_gt)
         statistics[5] += 1        
-        statistics_per_length[lengths, 0] += np.logical_and(connection_pred == 1, connection_gt == 1).sum()
-        statistics_per_length[lengths, 1] += np.logical_and(connection_pred == 0, connection_gt == 1).sum()                  
-        statistics_per_length[lengths, 2] += np.logical_and(connection_pred == 1, connection_gt == 0).sum()                  
-        statistics_per_length[lengths, 3] += np.logical_and(connection_pred == 0, connection_gt == 0).sum()
+        statistics_per_length[lengths, 0] += np.logical_and(connection_pred > 0.5, connection_gt == 1).sum()
+        statistics_per_length[lengths, 1] += np.logical_and(connection_pred < 0.5, connection_gt == 1).sum()                  
+        statistics_per_length[lengths, 2] += np.logical_and(connection_pred > 0.5, connection_gt == 0).sum()                  
+        statistics_per_length[lengths, 3] += np.logical_and(connection_pred < 0.5, connection_gt == 0).sum()
 
         if sample_index % 500 < 16 or visualize:
             index_offset = sample_index % 500
