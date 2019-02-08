@@ -8,7 +8,7 @@ def parse_args():
                         default='.', type=str)
     parser.add_argument('--corner_type', dest='corner_type',
                         help='corner type for the search algorithm',
-                        default='dets_only', type=str)
+                        default='annots_only', type=str)
     parser.add_argument('--testing_corner_type', dest='testing_corner_type',
                         help='testing corner type for the search algorithm',
                         default='dets_only', type=str)

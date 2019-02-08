@@ -31,6 +31,25 @@ def main(options):
     ##############################################################################################################
     ############################################### Define Model #################################################
     ##############################################################################################################
+
+    if False:
+        from dataset.building import Building
+        #1525562852.02
+        building = Building(options, '1526404038.2', with_augmentation=False, corner_type='annots_only')
+        # edge_state = building.edges_gt.astype(np.float32)
+        # edge_state[1] = 0.3
+        # edge_state[2] = 0.3
+        # edge_state[3] = 0.6
+        # edge_state[4] = 0.6
+        edge_confidence = np.load('test/confidence.npy')
+        print(edge_confidence)
+        edge_state = building.post_processing(edge_confidence, debug=True)
+        print(edge_state)
+        images, _ = building.visualize(mode='', edge_state=edge_state)
+        cv2.imwrite('test/image.png', images[0])
+        exit(1)
+        pass
+    
     if 'graph' in options.suffix:
         model = GraphModelCustom(options)
     else:
@@ -80,8 +99,8 @@ def main(options):
             model.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges - 1) + '_checkpoint.pth'))
             optimizer.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges - 1) + '_optim.pth'))
         elif options.restore == 3:
-            model.load_state_dict(torch.load(options.checkpoint_dir.replace('dets_only', 'annots_only') + '/' + str(num_edges) + '_checkpoint.pth'))
-            optimizer.load_state_dict(torch.load(options.checkpoint_dir.replace('dets_only', 'annots_only') + '/' + str(num_edges) + '_optim.pth'))
+            model.load_state_dict(torch.load('checkpoint/batch_annots_only/' + str(num_edges) + '_checkpoint.pth'))
+            optimizer.load_state_dict(torch.load('checkpoint/batch_annots_only/' + str(num_edges) + '_optim.pth'))
             pass        
 
         if options.num_edges == -1 and os.path.exists(options.checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth'):
@@ -97,10 +116,12 @@ def main(options):
         
         if options.task == 'visualize':
             with torch.no_grad():
+                additional_models = []
                 annotation_model = create_model(options)
                 annotation_model = annotation_model.cuda()
                 annotation_model.load_state_dict(torch.load(options.checkpoint_dir.replace(options.corner_type, 'annots_only') + '/' + str(num_edges) + '_checkpoint.pth'))
-                testOneEpoch(options, model, dset_val, [annotation_model], visualize=True)
+                additional_models.append(annotation_model)
+                testOneEpoch(options, model, dset_val, additional_models, visualize=True)
                 pass
             exit(1)
             pass
@@ -150,8 +171,8 @@ def main(options):
                 else:
                     if len(connection_gt) > 200:
                         continue
-                    if len(connection_gt) > 100 and 'sharing' in options.suffix:
-                        continue                
+                    #if len(connection_gt) > 100 and 'sharing' in options.suffix:
+                    #continue                
                     image_inp = torch.cat([im_arr.unsqueeze(0).repeat((len(edge_images), 1, 1, 1)), edge_images.unsqueeze(1)], dim=1)
                     connection_pred = model(image_inp, left_edges, right_edges)
                     pass
@@ -227,7 +248,7 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
         if 'graph' in options.suffix:
             connection_pred = model(im_arr.unsqueeze(0), connections, left_edges, right_edges)
         else:
-            if len(connection_gt) > 150 or (len(connection_gt) > 100 and 'sharing' in options.suffix):
+            if len(connection_gt) > 150:
                 #all_images.append(np.zeros((256, 256, 3), dtype=np.uint8))
                 #all_images.append(np.zeros((256, 256, 3), dtype=np.uint8))                
                 continue                
@@ -250,11 +271,15 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
             continue
         data_iterator.set_description(status)
 
+<<<<<<< HEAD
         connections = connections.detach().cpu().numpy() * 256.0
         lengths = np.sqrt((connections[:, 0] - connections[:, 2])**2 + (connections[:, 1] - connections[:, 3])**2)
         lengths = lengths.astype('int32')
 
         connection_pred = connection_pred.detach().cpu().numpy() > 0.5
+=======
+        connection_pred = connection_pred.detach().cpu().numpy()
+>>>>>>> 7a132a1fa0936bd4d347a18745965f67aac6fc13
         connection_gt = connection_gt.detach().cpu().numpy() > 0.5
         statistics[0] += np.logical_and(connection_pred == 1, connection_gt == 1).sum()
         statistics[1] += np.logical_and(connection_pred == 0, connection_gt == 1).sum()                  
@@ -270,23 +295,36 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
         if sample_index % 500 < 16 or visualize:
             index_offset = sample_index % 500
             building = dataset.buildings[building_index]
-            images, _ = building.visualize(mode='draw_annot', edge_state=connection_pred, building_idx=building_index)                            
-            if sample_index % 500 < 16:
-                cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_image.png', images[0])
-                pass
-            row_images.append(images[0])
-            
+
             images, _ = building.visualize(mode='draw_annot', edge_state=connection_gt, building_idx=building_index)                            
             if sample_index % 500 < 16:
                 cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_input.png', images[0])
                 pass
             row_images.append(images[0])
+            
+            images, _ = building.visualize(mode='draw_annot', edge_state=connection_pred, building_idx=building_index)                            
+            if sample_index % 500 < 16:
+                cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_image.png', images[0])
+                pass
+            row_images.append(images[0])
+            if visualize:
+                #print(building._id)
+                #np.save('test/confidence.npy', connection_pred)
+                #print(connection_pred[35])
+                #connection_pred[35] = 1
+                images, _ = building.visualize(mode='draw_annot', edge_state=connection_pred, building_idx=building_index, post_processing=True)                            
+                row_images.append(images[0])
+                pass
 
             for additional_model in additional_models:
                 connection_pred = additional_model(image_inp, left_edges, right_edges)
-                connection_pred = connection_pred.detach().cpu().numpy() > 0.5
+                connection_pred = connection_pred.detach().cpu().numpy()
                 images, _ = building.visualize(mode='draw_annot', edge_state=connection_pred, building_idx=building_index)
-                row_images.append(images[0])                
+                row_images.append(images[0])
+                if visualize:
+                    images, _ = building.visualize(mode='draw_annot', edge_state=connection_pred, building_idx=building_index, post_processing=True)
+                    row_images.append(images[0])
+                    pass
                 continue
             #row_images.append(images[1])
             #row_images.append(images[2]) 
@@ -297,6 +335,9 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
             pass
         continue
     if visualize:
+        if len(row_images) > 0:
+            all_images.append(row_images)
+            pass        
         image = tileImages(all_images, background_color=0)
         cv2.imwrite(options.test_dir + '/results.png', image)        
         pass
