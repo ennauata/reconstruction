@@ -30,10 +30,11 @@ class GraphData(Dataset):
         self.buildings = []
         for _id in id_list:
             corner_types = []
-            if 'dets' in options.corner_type:
+            corner_type = options.corner_type if split == 'train' else options.corner_type
+            if 'dets' in corner_type:
                 corner_types.append('dets_only')
                 pass
-            if 'annots' in options.corner_type:
+            if 'annots' in corner_type:
                 corner_types.append('annots_only')
                 pass
             for corner_type in corner_types:
