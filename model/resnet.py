@@ -288,7 +288,7 @@ class ResNetBatch(nn.Module):
 
         for _ in range(1, blocks):
             if _ == blocks - 1 and 'sharing' in self.options.suffix:
-                layers.append(block(self.inplanes, planes // 4))
+                layers.append(block(self.inplanes, planes))
             else:
                 layers.append(block(self.inplanes, planes))
                 pass
@@ -297,13 +297,17 @@ class ResNetBatch(nn.Module):
         return nn.Sequential(*layers)
 
     def aggregate(self, x, left_edges, right_edges):
-        left_x = torch.zeros(x.shape).cuda()
-        left_x.index_add_(0, left_edges[:, 0], x[left_edges[:, 1]])
-        right_x = torch.zeros(x.shape).cuda()
-        right_x.index_add_(0, right_edges[:, 0], x[right_edges[:, 1]])
-        global_x = torch.zeros(x.shape).cuda()
-        global_x[:] = x.sum(0)
-        x = torch.cat([x, left_x, right_x, global_x], dim=1)
+        #left_x = torch.zeros(x.shape).cuda()
+        #left_x.index_add_(0, left_edges[:, 0], x[left_edges[:, 1]])
+        count = torch.zeros(len(x)).cuda()
+        count.index_add_(0, left_edges[:, 0], torch.ones(len(left_edges)).cuda())
+        #x.index_add_(0, left_edges[:, 0], x[left_edges[:, 1]] / torch.clamp(count[left_edges[:, 0]], min=1).view((-1, 1, 1, 1)))
+        x = x + torch.stack([x[left_edges[left_edges[:, 0] == edge_index, 1]].mean(0) for edge_index in range(len(x))], dim=0)
+        #count = torch.zeros(len(x)).cuda()
+        #count.index_add_(0, right_edges[:, 0], torch.ones(len(right_edges)).cuda())
+        #x.index_add_(0, right_edges[:, 0], x[right_edges[:, 1]] / torch.clamp(count[right_edges[:, 0]], min=1).view((-1, 1, 1, 1)))
+        x = x + torch.stack([x[right_edges[right_edges[:, 0] == edge_index, 1]].mean(0) for edge_index in range(len(x))], dim=0)
+        #x = x + x.mean(0, keepdim=True)
         return x
         
     def forward(self, x, left_edges=None, right_edges=None):

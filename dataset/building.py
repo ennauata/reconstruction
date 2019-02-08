@@ -24,7 +24,7 @@ def draw_edge(edge_index, edges):
 class Building():
     """Maintain a building to create data examples in the same format"""
 
-    def __init__(self, options, _id, with_augmentation=True, corner_type='dets_only'):
+    def __init__(self, options, _id, with_augmentation=True, corner_type='annots_only'):
         self.options = options
         self.with_augmentation = with_augmentation
 
@@ -453,10 +453,10 @@ class Building():
                 continue
             graph_edge_attr = np.concatenate([graph_edge_attr, np.ones((len(graph_edge_index) - len(graph_edge_attr), 1), dtype=np.float32)], axis=0)
             pass
-        left_edges = [np.array([[edge_index, neighbor] for neighbor in neighbors[0]]) for neighbors in edge_neighbors]
+        left_edges = [np.array([[edge_index, neighbor] for neighbor in neighbors[0]]) for edge_index, neighbors in enumerate(edge_neighbors)]
         left_edges = np.concatenate(left_edges, axis=0)
         left_edges = left_edges[left_edges[:, 0] != left_edges[:, 1]]
-        right_edges = [np.array([[edge_index, neighbor] for neighbor in neighbors[1]]) for neighbors in edge_neighbors]
+        right_edges = [np.array([[edge_index, neighbor] for neighbor in neighbors[1]]) for edge_index, neighbors in enumerate(edge_neighbors)]
         right_edges = np.concatenate(right_edges, axis=0)
         right_edges = right_edges[right_edges[:, 0] != right_edges[:, 1]]
         graph_edge_index = np.array(graph_edge_index)
@@ -819,12 +819,14 @@ class Building():
         ## Compute two paths between any pair of corners, one passing through chosen edges and one doesn't
         path_distances = []
         path_lengths = []
+        ## Compute the path through inactive edges        
         for _ in range(1):
             corner_path_distances = np.full((num_corners, num_corners), fill_value=100.0)
             corner_path_lengths = np.zeros((num_corners, num_corners))
             for edge_index in range(num_edges):
                 if not edge_state[edge_index]:
                     distance = 0.5 - edge_confidence[edge_index]
+                    #print(edge_index, edge_corner[edge_index], distance)
                     corner_path_distances[edge_corner[edge_index][0], edge_corner[edge_index][1]] = distance
                     corner_path_distances[edge_corner[edge_index][1], edge_corner[edge_index][0]] = distance
                     corner_path_lengths[edge_corner[edge_index][0], edge_corner[edge_index][1]] = 1
@@ -841,11 +843,15 @@ class Building():
                 if not np.any(changed_mask):
                     break
                 corner_path_lengths[changed_mask] = (corner_path_lengths[np.arange(num_corners, dtype=np.int32), corner_neighbor] + np.ones(corner_path_lengths.shape))[changed_mask]
+                #print(corner_path_distances[4], new_corner_path_distances[4], corner_neighbor[4], corner_path_distances[corner_neighbor[4]])
+                #exit(1)
                 corner_path_distances = new_corner_path_distances
                 continue
             path_distances.append(corner_path_distances)
             path_lengths.append(corner_path_lengths)            
             continue
+
+        ## Compute the path through active edges
         for _ in range(1):
             corner_path_distances = np.full((num_corners, num_corners), fill_value=100.0)
             corner_path_lengths = np.zeros((num_corners, num_corners))
@@ -900,7 +906,7 @@ class Building():
             print(edge_corner[edge_state])
             print(path_distances)
             print(path_lengths)            
-            print(path_distance)                
+            print(mean_path_distances)                
             print('neighbor', corner_neighbor)
             pass
         
@@ -968,7 +974,6 @@ class Building():
                 continue
             if np.all(edge_state == new_edge_state):
                 break            
-            print(edge_state, new_edge_state)
             edge_state = new_edge_state
             continue
         return edge_state

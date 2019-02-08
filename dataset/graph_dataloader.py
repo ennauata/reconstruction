@@ -50,8 +50,9 @@ class GraphData(Dataset):
             if len(self.buildings) >= self.num_images:
                 break
             continue
-        #self.buildings = self.buildings[:10]
+        #self.buildings = self.buildings[-6:-5]
         #self.num_images = len(self.buildings)
+        
         print('num images', split, len(self.buildings))
         self.split = split
         self.num_edges = num_edges
