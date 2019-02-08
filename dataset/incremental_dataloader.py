@@ -81,9 +81,10 @@ class GraphData(Dataset):
         else:
             num_edges = self.num_edges
             pass
-        sample, label, _ = building.create_sample(num_edges_source=num_edges)
 
-        return sample, label, building._id
+        sample, label, coords = building.create_sample(num_edges_source=num_edges)
+
+        return sample, label, building._id, coords
 
     # Override to give PyTorch size of dataset
     def __len__(self):

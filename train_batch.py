@@ -73,11 +73,12 @@ def main(options):
     with open('{}/building_reconstruction/la_dataset_new/train_list_prime.txt'.format(PREFIX)) as f:
         file_list = [line.strip() for line in f.readlines()]
         train_list = file_list[:-50]
-        #valid_list = file_list[-50:]
+        valid_list = file_list[-50:]
+        #valid_list = file_list[:-50]
         pass
 
-    with open('{}/building_reconstruction/la_dataset_new/valid_list.txt'.format(PREFIX)) as f:
-        valid_list = [line.strip() for line in f.readlines()]
+    # with open('{}/building_reconstruction/la_dataset_new/valid_list.txt'.format(PREFIX)) as f:
+    #     valid_list = [line.strip() for line in f.readlines()]
 
     best_score = 0.0
     mt = Metrics()
@@ -147,6 +148,9 @@ def main(options):
             exit(1)
             pass
 
+        # for m in model.modules():
+        #     if isinstance(m, nn.BatchNorm2d):
+        #         m.eval()
 
         for epoch in range(10):
             #os.system('rm ' + options.test_dir + '/' + str(num_edges) + '_*')
@@ -233,11 +237,11 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
     data_loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=1)    
     data_iterator = tqdm(data_loader, total=len(dataset))
     statistics = np.zeros(6)
+    statistics_per_length = np.zeros((350, 4))
     all_images = []
     row_images = []    
     for sample_index, sample in enumerate(data_iterator):
         im_arr, edge_images, corners, connections, corner_gt, connection_gt, edge_index, edge_attr, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(0), sample[9].cuda().squeeze(), sample[10].squeeze().item()
-
         #connection_confidence = validator.validate(dset_train.buildings[building_index])
         #connections = torch.cat([connections, connection_confidence.unsqueeze(-1)], dim=-1)
 
@@ -267,7 +271,15 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
             continue
         data_iterator.set_description(status)
 
+<<<<<<< HEAD
+        connections = connections.detach().cpu().numpy() * 256.0
+        lengths = np.sqrt((connections[:, 0] - connections[:, 2])**2 + (connections[:, 1] - connections[:, 3])**2)
+        lengths = lengths.astype('int32')
+
+        connection_pred = connection_pred.detach().cpu().numpy() > 0.5
+=======
         connection_pred = connection_pred.detach().cpu().numpy()
+>>>>>>> 7a132a1fa0936bd4d347a18745965f67aac6fc13
         connection_gt = connection_gt.detach().cpu().numpy() > 0.5
         statistics[0] += np.logical_and(connection_pred == 1, connection_gt == 1).sum()
         statistics[1] += np.logical_and(connection_pred == 0, connection_gt == 1).sum()                  
@@ -275,7 +287,11 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
         statistics[3] += np.logical_and(connection_pred == 0, connection_gt == 0).sum()
         statistics[4] += np.all(connection_pred == connection_gt)
         statistics[5] += 1        
-        
+        statistics_per_length[lengths, 0] += np.logical_and(connection_pred == 1, connection_gt == 1).sum()
+        statistics_per_length[lengths, 1] += np.logical_and(connection_pred == 0, connection_gt == 1).sum()                  
+        statistics_per_length[lengths, 2] += np.logical_and(connection_pred == 1, connection_gt == 0).sum()                  
+        statistics_per_length[lengths, 3] += np.logical_and(connection_pred == 0, connection_gt == 0).sum()
+
         if sample_index % 500 < 16 or visualize:
             index_offset = sample_index % 500
             building = dataset.buildings[building_index]
@@ -325,7 +341,12 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
         image = tileImages(all_images, background_color=0)
         cv2.imwrite(options.test_dir + '/results.png', image)        
         pass
+
     print('statistics', statistics[0] / (statistics[0] + statistics[1]), statistics[3] / (statistics[2] + statistics[3]), statistics[4] / statistics[5], statistics[5])
+    for i in range(350):
+        if (statistics_per_length[i, 0] + statistics_per_length[i, 1] > 0) and (statistics_per_length[i, 2] + statistics_per_length[i, 3] > 0): 
+            print('{}, {}, {}'.format(i+1, statistics_per_length[i, 0] / (statistics_per_length[i, 0] + statistics_per_length[i, 1] + 1E-10), statistics_per_length[i, 3] / (statistics_per_length[i, 2] + statistics_per_length[i, 3] + 1E-10)))
+
     print('validation loss', np.array(epoch_losses).mean(0))
     model.train()
     return
