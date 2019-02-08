@@ -91,9 +91,11 @@ def testOneEpoch(options, edge_classifier, dataset, num_edges):
     data_loader = DataLoader(dataset, batch_size=options.batch_size, shuffle=False, num_workers=1)    
     data_iterator = tqdm(data_loader, total=int(np.ceil(float(len(dataset)) / options.batch_size)))
     statistics = np.zeros(4)
+    statistics_per_length = np.zeros((350, 4))
     for sample_index, sample in enumerate(data_iterator):
-        im_arr, label_gt, IDs = sample[0].cuda().squeeze(1), sample[1].cuda().squeeze(1), sample[2]
-        
+        im_arr, label_gt, IDs, connections = sample[0].cuda().squeeze(1), sample[1].cuda().squeeze(1), sample[2], sample[3].numpy().squeeze(1)
+        print(connections.shape)
+
         logits = edge_classifier(im_arr)
         probs = torch.nn.functional.softmax(logits, dim=-1)
         loss = F.cross_entropy(logits, label_gt)
@@ -115,7 +117,13 @@ def testOneEpoch(options, edge_classifier, dataset, num_edges):
         statistics[2] += np.logical_and(label_pred == 1, label_gt == 0).sum()                  
         statistics[3] += np.logical_and(label_pred == 0, label_gt == 0).sum()                  
         #statistics[4] += len(label_pred)
-        
+        lengths = np.sqrt((connections[:, 0] - connections[:, 2])**2 + (connections[:, 1] - connections[:, 3])**2)
+        lengths = lengths.astype('int32')
+        statistics_per_length[lengths, 0] += np.logical_and(label_pred == 1, label_gt == 1).sum()
+        statistics_per_length[lengths, 1] += np.logical_and(label_pred == 0, label_gt == 1).sum()                  
+        statistics_per_length[lengths, 2] += np.logical_and(label_pred == 1, label_gt == 0).sum()                  
+        statistics_per_length[lengths, 3] += np.logical_and(label_pred == 0, label_gt == 0).sum()
+
         if sample_index % 500 == 0:
             im_arr = im_arr.detach().cpu().numpy()
             probs = probs.detach().cpu().numpy()
@@ -131,6 +139,10 @@ def testOneEpoch(options, edge_classifier, dataset, num_edges):
             pass
         continue
     print('statistics', statistics[0] / (statistics[0] + statistics[1]), statistics[3] / (statistics[2] + statistics[3]))
+    for i in range(350):
+        if (statistics_per_length[i, 0] + statistics_per_length[i, 1] > 0) and (statistics_per_length[i, 2] + statistics_per_length[i, 3] > 0): 
+            print('{}, {}, {}'.format(i+1, statistics_per_length[i, 0] / (statistics_per_length[i, 0] + statistics_per_length[i, 1] + 1E-10), statistics_per_length[i, 3] / (statistics_per_length[i, 2] + statistics_per_length[i, 3] + 1E-10)))
+
     print('validation loss', np.array(epoch_losses).mean(0))
     edge_classifier.train()
     return
@@ -200,6 +212,7 @@ with open('{}/building_reconstruction/la_dataset_new/train_list_prime.txt'.forma
     file_list = [line.strip() for line in f.readlines()]
     train_list = file_list[:-50]
     valid_list = file_list[-50:]
+    #valid_list = file_list[:-50]
     pass
 #with open('{}/building_reconstruction/la_dataset_new/valid_list.txt'.format(PREFIX)) as f:
 #valid_list = [line.strip() for line in f.readlines()]
@@ -289,7 +302,7 @@ for num_edges in all_num_edges:
         pass
 
     
-    for epoch in range(10):
+    for epoch in range(1000):
         #os.system('rm ' + options.test_dir + '/' + str(num_edges) + '_*')
         dset_train.reset()
         train_loader = DataLoader(dset_train, batch_size=options.batch_size, shuffle=True, num_workers=1)    
