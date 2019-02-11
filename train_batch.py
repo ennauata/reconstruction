@@ -25,12 +25,33 @@ from utils.utils import tileImages
 from validator import Validator
 from options import parse_args
 from model.resnet import create_model, GraphModelCustom
-
+from model.modules import findLoopsModule
 
 def main(options):
     ##############################################################################################################
     ############################################### Define Model #################################################
     ##############################################################################################################
+
+    if False:
+        from dataset.building import Building
+        #1525562852.02
+        building = Building(options, '1525562852.02', with_augmentation=False, corner_type='annots_only')
+        edge_confidence = building.edges_gt.astype(np.float32)
+        edge_confidence += np.random.random(len(edge_confidence)) * 0
+        # edge_state[1] = 0.3
+        # edge_state[2] = 0.3
+        # edge_state[3] = 0.6
+        # edge_state[4] = 0.6
+        #edge_confidence = np.load('test/confidence.npy')
+        print(edge_confidence)
+        edge_corner = building.edge_corner
+        print(edge_corner)
+        loops = findLoopsModule(torch.from_numpy(edge_confidence).cuda(), torch.from_numpy(edge_corner).cuda(), len(building.corners_gt), max_num_loop_corners=4)
+        print(loops)
+        exit(1)
+        images, _ = building.visualize(mode='', edge_state=edge_state)
+        cv2.imwrite('test/image.png', images[0])
+        exit(1)
 
     if False:
         from dataset.building import Building
@@ -77,8 +98,8 @@ def main(options):
         #valid_list = file_list[:-50]
         pass
 
-    # with open('{}/building_reconstruction/la_dataset_new/valid_list.txt'.format(PREFIX)) as f:
-    #     valid_list = [line.strip() for line in f.readlines()]
+    with open('{}/building_reconstruction/la_dataset_new/valid_list.txt'.format(PREFIX)) as f:
+        valid_list = [line.strip() for line in f.readlines()]
 
     best_score = 0.0
     mt = Metrics()
@@ -102,7 +123,13 @@ def main(options):
             model.load_state_dict(torch.load('checkpoint/batch_annots_only/' + str(num_edges) + '_checkpoint.pth'))
             optimizer.load_state_dict(torch.load('checkpoint/batch_annots_only/' + str(num_edges) + '_optim.pth'))
             pass        
-
+        elif options.restore == 4:
+            state_dict = torch.load(options.checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth')
+            state = model.state_dict()
+            new_state_dict = {k: v for k, v in state_dict.items() if k in state and state[k].shape == v.shape}
+            state.update(new_state_dict)
+            model.load_state_dict(state)
+            #optimizer.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges) + '_optim.pth'))            
         if options.num_edges == -1 and os.path.exists(options.checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth'):
             continue
 
@@ -117,10 +144,12 @@ def main(options):
         if options.task == 'visualize':
             with torch.no_grad():
                 additional_models = []
-                annotation_model = create_model(options)
-                annotation_model = annotation_model.cuda()
-                annotation_model.load_state_dict(torch.load(options.checkpoint_dir.replace(options.corner_type, 'annots_only') + '/' + str(num_edges) + '_checkpoint.pth'))
-                additional_models.append(annotation_model)
+                if options.suffix == '':
+                    annotation_model = create_model(options)
+                    annotation_model = annotation_model.cuda()
+                    annotation_model.load_state_dict(torch.load(options.checkpoint_dir.replace(options.corner_type, 'annots_only') + '/' + str(num_edges) + '_checkpoint.pth'))
+                    additional_models.append(annotation_model)
+                    pass
                 testOneEpoch(options, model, dset_val, additional_models, visualize=True)
                 pass
             exit(1)
@@ -162,25 +191,40 @@ def main(options):
             optimizer.zero_grad()        
             for sample_index, sample in enumerate(data_iterator):
 
-                im_arr, edge_images, corners, connections, corner_gt, connection_gt, edge_index, edge_attr, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(), sample[9].cuda().squeeze(), sample[10].squeeze().item()
+                im_arr, edge_images, corners, edges, corner_gt, edge_gt, corner_edge_pairs, edge_corner, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(), sample[9].cuda().squeeze(), sample[10].squeeze().item()
 
-                #print('num edges', len(connection_gt))
+                #print('num edges', len(edge_gt))
 
                 if 'graph' in options.suffix:
-                    connection_pred = model(im_arr.unsqueeze(0), connections, left_edges, right_edges)
+                    edge_pred, loop_pred, loop_corners = model(im_arr.unsqueeze(0), corners, edges, corner_edge_pairs, edge_corner)
                 else:
-                    if len(connection_gt) > 200:
+                    if len(edge_gt) > 200:
                         continue
-                    #if len(connection_gt) > 100 and 'sharing' in options.suffix:
+                    #if len(edge_gt) > 100 and 'sharing' in options.suffix:
                     #continue                
                     image_inp = torch.cat([im_arr.unsqueeze(0).repeat((len(edge_images), 1, 1, 1)), edge_images.unsqueeze(1)], dim=1)
-                    connection_pred = model(image_inp, left_edges, right_edges)
+                    edge_pred = model(image_inp, left_edges, right_edges)
                     pass
 
                 #corner_loss = F.binary_cross_entropy(corner_pred, corner_gt) * 0
-                connection_loss = F.binary_cross_entropy(connection_pred, connection_gt)
-                losses = [connection_loss]
+                edge_loss = F.binary_cross_entropy(edge_pred, edge_gt)
+                losses = [edge_loss]
 
+                if 'loop' in options.suffix:
+                    num_corners = len(corners)                    
+                    edge_corner_gt = edge_corner[edge_gt > 0.5]
+                    corner_pair_mask = torch.zeros(num_corners * num_corners).cuda()
+                    corner_pair_mask[edge_corner_gt[:, 0] * num_corners + edge_corner_gt[:, 1]] = 1
+                    corner_pair_mask[edge_corner_gt[:, 1] * num_corners + edge_corner_gt[:, 0]] = 1
+                    loop_gt = []
+                    for loop in loop_corners:
+                        loop_corner_pairs = loop * num_corners + torch.cat([loop[1:], loop[:1]], dim=0)
+                        loop_gt.append(corner_pair_mask[loop_corner_pairs].min())
+                        continue
+                    loop_gt = torch.stack(loop_gt, dim=0)                    
+                    losses.append(F.binary_cross_entropy(loop_pred, loop_gt))
+                    pass
+                
                 loss = sum(losses)        
 
                 loss.backward()
@@ -203,12 +247,12 @@ def main(options):
                     index_offset = sample_index % 1000
                     building = dset_train.buildings[building_index]
                     building.reset()
-                    #building.update_edges(connection_pred.detach().cpu().numpy() > 0.5)
-                    images, _ = building.visualize(mode='', edge_state=connection_pred.detach().cpu().numpy() > 0.5)
+                    #building.update_edges(edge_pred.detach().cpu().numpy() > 0.5)
+                    images, _ = building.visualize(mode='', edge_state=edge_pred.detach().cpu().numpy() > 0.5)
                     cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_image.png', images[0])
                     building.reset()
-                    #building.update_edges(connection_confidence.detach().cpu().numpy() > 0.5)
-                    images, _ = building.visualize(mode='', edge_state=connection_gt.detach().cpu().numpy() > 0.5)
+                    #building.update_edges(edge_confidence.detach().cpu().numpy() > 0.5)
+                    images, _ = building.visualize(mode='', edge_state=edge_gt.detach().cpu().numpy() > 0.5)
                     cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_input.png', images[0])
                     pass
                 continue
@@ -241,25 +285,40 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
     all_images = []
     row_images = []    
     for sample_index, sample in enumerate(data_iterator):
-        im_arr, edge_images, corners, connections, corner_gt, connection_gt, edge_index, edge_attr, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(0), sample[9].cuda().squeeze(), sample[10].squeeze().item()
-        #connection_confidence = validator.validate(dset_train.buildings[building_index])
-        #connections = torch.cat([connections, connection_confidence.unsqueeze(-1)], dim=-1)
+        im_arr, edge_images, corners, edges, corner_gt, edge_gt, edge_pairs, edge_corner, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(0), sample[9].cuda().squeeze(), sample[10].squeeze().item()
+        #edge_confidence = validator.validate(dset_train.buildings[building_index])
+        #edges = torch.cat([edges, edge_confidence.unsqueeze(-1)], dim=-1)
 
         if 'graph' in options.suffix:
-            connection_pred = model(im_arr.unsqueeze(0), connections, left_edges, right_edges)
+            edge_pred, loop_pred, loop_corners = model(im_arr.unsqueeze(0), corners, edges, edge_pairs, edge_corner)
         else:
-            if len(connection_gt) > 150:
+            if len(edge_gt) > 150:
                 #all_images.append(np.zeros((256, 256, 3), dtype=np.uint8))
                 #all_images.append(np.zeros((256, 256, 3), dtype=np.uint8))                
                 continue                
             image_inp = torch.cat([im_arr.unsqueeze(0).repeat((len(edge_images), 1, 1, 1)), edge_images.unsqueeze(1)], dim=1)
-            connection_pred = model(image_inp, left_edges, right_edges)
+            edge_pred = model(image_inp, left_edges, right_edges)
             pass
         
         #corner_loss = F.binary_cross_entropy(corner_pred, corner_gt) * 0
-        connection_loss = F.binary_cross_entropy(connection_pred, connection_gt)
-        losses = [connection_loss]
+        edge_loss = F.binary_cross_entropy(edge_pred, edge_gt)
+        losses = [edge_loss]
 
+        if 'loop' in options.suffix:
+            num_corners = len(corners)                    
+            edge_corner_gt = edge_corner[edge_gt > 0.5]
+            corner_pair_mask = torch.zeros(num_corners * num_corners).cuda()
+            corner_pair_mask[edge_corner_gt[:, 0] * num_corners + edge_corner_gt[:, 1]] = 1
+            corner_pair_mask[edge_corner_gt[:, 1] * num_corners + edge_corner_gt[:, 0]] = 1
+            loop_gt = []
+            for loop in loop_corners:
+                loop_corner_pairs = loop * num_corners + torch.cat([loop[1:], loop[:1]], dim=0)
+                loop_gt.append(corner_pair_mask[loop_corner_pairs].min())
+                continue
+            loop_gt = torch.stack(loop_gt, dim=0)                    
+            losses.append(F.binary_cross_entropy(loop_pred, loop_gt))
+            pass
+        
         loss = sum(losses)        
 
         ## Progress bar
@@ -271,55 +330,68 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
             continue
         data_iterator.set_description(status)
 
-        connections = connections.detach().cpu().numpy() * 256.0
-        lengths = np.sqrt((connections[:, 0] - connections[:, 2])**2 + (connections[:, 1] - connections[:, 3])**2)
+        edges = edges.detach().cpu().numpy() * 256.0
+        lengths = np.sqrt((edges[:, 0] - edges[:, 2])**2 + (edges[:, 1] - edges[:, 3])**2)
         lengths = lengths.astype('int32')
 
-        connection_pred = connection_pred.detach().cpu().numpy()
+        edge_pred = edge_pred.detach().cpu().numpy()
 
-        connection_gt = connection_gt.detach().cpu().numpy() > 0.5
-        statistics[0] += np.logical_and(connection_pred > 0.5, connection_gt == 1).sum()
-        statistics[1] += np.logical_and(connection_pred < 0.5, connection_gt == 1).sum()                  
-        statistics[2] += np.logical_and(connection_pred > 0.5, connection_gt == 0).sum()                  
-        statistics[3] += np.logical_and(connection_pred < 0.5, connection_gt == 0).sum()
-        statistics[4] += np.all(connection_pred == connection_gt)
+        edge_gt = edge_gt.detach().cpu().numpy() > 0.5
+        statistics[0] += np.logical_and(edge_pred > 0.5, edge_gt == 1).sum()
+        statistics[1] += np.logical_and(edge_pred < 0.5, edge_gt == 1).sum()                  
+        statistics[2] += np.logical_and(edge_pred > 0.5, edge_gt == 0).sum()                  
+        statistics[3] += np.logical_and(edge_pred < 0.5, edge_gt == 0).sum()
+        statistics[4] += np.all(edge_pred == edge_gt)
         statistics[5] += 1        
-        statistics_per_length[lengths, 0] += np.logical_and(connection_pred > 0.5, connection_gt == 1).sum()
-        statistics_per_length[lengths, 1] += np.logical_and(connection_pred < 0.5, connection_gt == 1).sum()                  
-        statistics_per_length[lengths, 2] += np.logical_and(connection_pred > 0.5, connection_gt == 0).sum()                  
-        statistics_per_length[lengths, 3] += np.logical_and(connection_pred < 0.5, connection_gt == 0).sum()
+        statistics_per_length[lengths, 0] += np.logical_and(edge_pred > 0.5, edge_gt == 1).sum()
+        statistics_per_length[lengths, 1] += np.logical_and(edge_pred < 0.5, edge_gt == 1).sum()                  
+        statistics_per_length[lengths, 2] += np.logical_and(edge_pred > 0.5, edge_gt == 0).sum()                  
+        statistics_per_length[lengths, 3] += np.logical_and(edge_pred < 0.5, edge_gt == 0).sum()
 
         if sample_index % 500 < 16 or visualize:
             index_offset = sample_index % 500
             building = dataset.buildings[building_index]
 
-            images, _ = building.visualize(mode='draw_annot', edge_state=connection_gt, building_idx=building_index)                            
+            images, _ = building.visualize(mode='draw_annot', edge_state=edge_gt, building_idx=building_index)                            
             if sample_index % 500 < 16:
                 cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_input.png', images[0])
                 pass
             row_images.append(images[0])
             
-            images, _ = building.visualize(mode='draw_annot', edge_state=connection_pred, building_idx=building_index)                            
+            images, _ = building.visualize(mode='draw_annot', edge_state=edge_pred, building_idx=building_index)                            
             if sample_index % 500 < 16:
                 cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_image.png', images[0])
                 pass
             row_images.append(images[0])
+
+            if 'loop' in options.suffix:
+                loop_corners = [loop.detach().cpu().numpy() for loop in loop_corners]
+                image = building.visualizeLoops(loop_corners, loop_pred.detach().cpu().numpy() > 0.5)
+                if sample_index % 500 < 16:
+                    cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_loop_pred.png', image)
+                    pass
+                row_images.append(image)
+                image = building.visualizeLoops(loop_corners, loop_gt.detach().cpu().numpy() > 0.5)
+                if sample_index % 500 < 16:
+                    cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_loop_gt.png', image)
+                    pass
+                row_images.append(image)                                
             if visualize:
                 #print(building._id)
-                #np.save('test/confidence.npy', connection_pred)
-                #print(connection_pred[35])
-                #connection_pred[35] = 1
-                images, _ = building.visualize(mode='draw_annot', edge_state=connection_pred, building_idx=building_index, post_processing=True)                            
+                #np.save('test/confidence.npy', edge_pred)
+                #print(edge_pred[35])
+                #edge_pred[35] = 1
+                images, _ = building.visualize(mode='draw_annot', edge_state=edge_pred, building_idx=building_index, post_processing=True)                            
                 row_images.append(images[0])
                 pass
 
             for additional_model in additional_models:
-                connection_pred = additional_model(image_inp, left_edges, right_edges)
-                connection_pred = connection_pred.detach().cpu().numpy()
-                images, _ = building.visualize(mode='draw_annot', edge_state=connection_pred, building_idx=building_index)
+                edge_pred = additional_model(image_inp, left_edges, right_edges)
+                edge_pred = edge_pred.detach().cpu().numpy()
+                images, _ = building.visualize(mode='draw_annot', edge_state=edge_pred, building_idx=building_index)
                 row_images.append(images[0])
                 if visualize:
-                    images, _ = building.visualize(mode='draw_annot', edge_state=connection_pred, building_idx=building_index, post_processing=True)
+                    images, _ = building.visualize(mode='draw_annot', edge_state=edge_pred, building_idx=building_index, post_processing=True)
                     row_images.append(images[0])
                     pass
                 continue
@@ -340,9 +412,9 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
         pass
 
     print('statistics', statistics[0] / (statistics[0] + statistics[1]), statistics[3] / (statistics[2] + statistics[3]), statistics[4] / statistics[5], statistics[5])
-    for i in range(350):
-        if (statistics_per_length[i, 0] + statistics_per_length[i, 1] > 0) and (statistics_per_length[i, 2] + statistics_per_length[i, 3] > 0): 
-            print('{}, {}, {}'.format(i+1, statistics_per_length[i, 0] / (statistics_per_length[i, 0] + statistics_per_length[i, 1] + 1E-10), statistics_per_length[i, 3] / (statistics_per_length[i, 2] + statistics_per_length[i, 3] + 1E-10)))
+    # for i in range(350):
+    #     if (statistics_per_length[i, 0] + statistics_per_length[i, 1] > 0) and (statistics_per_length[i, 2] + statistics_per_length[i, 3] > 0): 
+    #         print('{}, {}, {}'.format(i+1, statistics_per_length[i, 0] / (statistics_per_length[i, 0] + statistics_per_length[i, 1] + 1E-10), statistics_per_length[i, 3] / (statistics_per_length[i, 2] + statistics_per_length[i, 3] + 1E-10)))
 
     print('validation loss', np.array(epoch_losses).mean(0))
     model.train()

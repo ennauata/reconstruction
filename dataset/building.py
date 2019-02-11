@@ -89,7 +89,7 @@ class Building():
         edges_gt = edges_gt.astype(np.int32)
         ce_t0 = np.zeros_like(edges_gt)
         #ce_t0[inds] = 1.0
-        corner_edge = self.compute_dists(corners_det, edges_det_from_corners, ce_assignment)
+        corner_edge, corner_edge_pairs, edge_corner = self.compute_dists(corners_det, edges_det_from_corners, ce_assignment)
 
         
         #ce_angles_bins, ca_gt = self.compute_corner_angle_bins(corner_edge, edges_det_from_corners, edges_gt, corners_det)
@@ -106,6 +106,8 @@ class Building():
         #self.e_xys = e_xys
         self.ce_angles_bins = ce_angles_bins
         self.corner_edge = corner_edge
+        self.corner_edge_pairs = corner_edge_pairs
+        self.edge_corner = edge_corner
         self.generate_bins = False
         self.num_edges = len(self.edges_gt)
         self.num_edges_gt = self.edges_gt.sum()
@@ -246,7 +248,8 @@ class Building():
                 edge_images.append(draw_edge(edge_index, edges_det))
                 continue
             edge_images = np.stack(edge_images, axis=0)
-            return [imgs.astype(np.float32), edge_images.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.graph_edge_index, self.graph_edge_attr, self.left_edges.astype(np.int64), self.right_edges.astype(np.int64)]
+            #return [imgs.astype(np.float32), edge_images.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.graph_edge_index, self.graph_edge_attr, self.left_edges.astype(np.int64), self.right_edges.astype(np.int64)]
+            return [imgs.astype(np.float32), edge_images.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.corner_edge_pairs, self.edge_corner, self.left_edges.astype(np.int64), self.right_edges.astype(np.int64)]
         else:
             return [imgs.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.graph_edge_index, self.graph_edge_attr]
 
@@ -496,14 +499,23 @@ class Building():
 
         # compute corner-edge dist
         r_dist = np.zeros((corners_det.shape[0], edges_det.shape[0]))
+        corner_edge_pairs = []
+        edge_corner = {}
+
         for i, c in enumerate(corners_det):
             for j in range(edges_det.shape[0]):
                 c1 = c_e_assignment[j][0]
                 c2 = c_e_assignment[j][1]
                 if np.array_equal(c1, c) or np.array_equal(c2, c):
                     r_dist[i, j] = 1.0
-
-        return r_dist
+                    corner_edge_pairs.append([i, j])
+                    if j not in edge_corner:
+                        edge_corner[j] = []
+                        pass
+                    edge_corner[j].append(i)
+        corner_edge_pairs = np.array(corner_edge_pairs)
+        edge_corner = np.array(list(edge_corner.values()))                    
+        return r_dist, corner_edge_pairs, edge_corner
 
     def compute_corner_angle_bins(self, ce_mat, edges_det, edges_gt, corners_det, n_bins=72, delta_degree=5.0):
 
@@ -763,6 +775,22 @@ class Building():
 
         return images, np.array([(np.logical_and(self.predicted_edges[-1] == self.edges_gt, self.edges_gt == 1)).sum(), self.predicted_edges[-1].sum(), self.edges_gt.sum(), int(np.all(self.predicted_edges[-1] == self.edges_gt))])
 
+    def visualizeLoops(self, loop_corners, loop_state):
+        image = self.imgs.copy()        
+        corner_image = self.compute_corner_image(self.corners_det)
+        image[corner_image > 0.5] = np.array([255, 0, 0], dtype=np.uint8)
+        loop_image = image.copy()
+        for loop, state in zip(loop_corners, loop_state.tolist()):
+            if state < 0.5:
+                continue
+            loop = loop.tolist()
+            for corner_index_1, corner_index_2 in zip(loop, loop[1:] + loop[:1]):
+                corner_1 = self.corners_det[corner_index_1]
+                corner_2 = self.corners_det[corner_index_2]
+                cv2.line(loop_image, (corner_1[1], corner_1[0]), (corner_2[1], corner_2[0]), thickness=3, color=1)
+                continue
+        return loop_image
+
     def colinear_edges(self):
         colinear_edges = []
         dot_threshold = np.cos(np.deg2rad(20))
@@ -779,20 +807,13 @@ class Building():
             continue
         colinear_edges = np.array(colinear_edges)
         return colinear_edges
-        
+
     def post_processing(self, edge_confidence, debug=False):
         corner_edge = self.corner_edge > 0.5
         num_corners = len(corner_edge)
         num_edges = len(edge_confidence)
-        edge_corner = {}
-        corner_indices, edge_indices = np.nonzero(corner_edge)
-        for corner_index, edge_index in zip(corner_indices, edge_indices):
-            if edge_index not in edge_corner:
-                edge_corner[edge_index] = []
-                pass
-            edge_corner[edge_index].append(corner_index)
-            continue
-        edge_corner = np.array(list(edge_corner.values()))
+
+        edge_corner = self.edge_corner
         
         edge_state = edge_confidence > 0.5
         colinear_edges = self.colinear_edges()

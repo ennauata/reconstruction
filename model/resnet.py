@@ -3,6 +3,7 @@ import torch.utils.model_zoo as model_zoo
 import torch
 import cv2
 import numpy as np
+from model.modules import findLoopsModule
 
 __all__ = ['ResNet', 'resnet18', 'resnet34', 'resnet50', 'resnet101',
            'resnet152']
@@ -397,41 +398,62 @@ class GraphModelCustom(nn.Module):
                                            nn.ReLU(inplace=True),
                                            nn.MaxPool2d(kernel_size=3, stride=2, padding=1))
 
-        self.image_layer_1 = self._make_layer(block, self.num_channels, layers[0])
-        self.image_layer_2 = self._make_layer(block, self.num_channels * 2, layers[1], stride=2)
-        self.image_layer_3 = self._make_layer(block, self.num_channels * 4, layers[2], stride=2)
-        self.image_layer_4 = self._make_layer(block, self.num_channels * 8, layers[3], stride=2)        
-        self.connection_pred = nn.Sequential(nn.Linear(512, 64), nn.ReLU(), nn.Linear(64, 1))
+        if 'image' in self.options.suffix:
+            self.image_layer_1 = self._make_layer(block, self.num_channels, layers[0])
+            self.image_layer_2 = self._make_layer(block, self.num_channels * 2, layers[1], stride=2)
+            self.image_layer_3 = self._make_layer(block, self.num_channels * 4, layers[2], stride=2)
+            self.image_layer_4 = self._make_layer(block, self.num_channels * 8, layers[3], stride=2)
+            self.num_edge_points = 8            
+            pass
+        self.edge_pred = nn.Sequential(nn.Linear(512, 64), nn.ReLU(), nn.Linear(64, 1))
 
-        self.num_edge_points = 8
+        if 'loop' in self.options.suffix:
+            loop_kernel_size = 7
+            self.padding = nn.ReflectionPad1d((loop_kernel_size - 1) // 2)
+            self.loop_encoder = nn.Sequential(self.padding, nn.Conv1d(128 + 3, 64, loop_kernel_size), nn.ReLU(),
+                                           self.padding, nn.Conv1d(64, 64, loop_kernel_size), nn.ReLU(),
+                                           self.padding, nn.Conv1d(64, 64, loop_kernel_size), nn.ReLU(),
+            )
+            self.loop_pred = nn.Sequential(nn.Linear(64, 64), nn.ReLU(), nn.Linear(64, 1))
+            pass
+        
         return
 
-    def image_features(self, image_x, connections):
+    def image_features(self, image_x, edges):
         width = image_x.shape[3]
         height = image_x.shape[2]
-        x_1 = connections[:, 1:2] * width
-        x_2 = connections[:, 3:4] * width
-        y_1 = connections[:, 0:1] * height
-        y_2 = connections[:, 2:3] * height
+        x_1 = edges[:, 1:2] * width
+        x_2 = edges[:, 3:4] * width
+        y_1 = edges[:, 0:1] * height
+        y_2 = edges[:, 2:3] * height
         alphas = (torch.arange(self.num_edge_points).float() / (self.num_edge_points - 1)).cuda()
         xs = torch.clamp(torch.round(x_1 + (x_2 - x_1) * alphas).long(), 0, width - 1)
         ys = torch.clamp(torch.round(y_1 + (y_2 - y_1) * alphas).long(), 0, height - 1)
         features = image_x[0, :, ys, xs]
         return features.mean(-1).transpose(1, 0)
     
-    def aggregate(self, x, left_edges, right_edges, image_x, connections):
-        if 'image' in self.options.suffix:
-            x = self.image_features(image_x, connections)
+    def aggregate(self, x, corner_edge_pairs, edge_corner, image_x, edges, num_corners, return_corner_features=False):
+        if 'image_only' in self.options.suffix:
+            x = self.image_features(image_x, edges)
         else:
-            left_x = torch.zeros(x.shape).cuda()
-            left_x.index_add_(0, left_edges[:, 0], x[left_edges[:, 1]])
-            right_x = torch.zeros(x.shape).cuda()
-            right_x.index_add_(0, right_edges[:, 0], x[right_edges[:, 1]])
-            global_x = self.image_features(image_x, connections)
-            # global_x[:] = x.sum(0)
+            corner_features = torch.zeros((num_corners, x.shape[1])).cuda()
+            corner_features.index_add_(0, corner_edge_pairs[:, 0], x[corner_edge_pairs[:, 1]])
+            count = torch.zeros(num_corners).cuda()
+            count.index_add_(0, corner_edge_pairs[:, 0], torch.ones(len(corner_edge_pairs)).cuda())
+            corner_features = corner_features / torch.clamp(count.view((-1, 1)), min=1)
+            left_x = corner_features[edge_corner[:, 0]]
+            right_x = corner_features[edge_corner[:, 1]]            
+            if 'image' in self.options.suffix:
+                global_x = self.image_features(image_x, edges)
+            else:
+                global_x = x.mean(0, keepdim=True).repeat(len(x), 1)
+                pass
             x = torch.cat([x, left_x, right_x, global_x], dim=1)
             pass
-        return x
+        if return_corner_features:
+            return x, corner_features
+        else:
+            return x
 
     def _make_layer(self, block, planes, blocks, stride=1):
         downsample = None
@@ -451,19 +473,53 @@ class GraphModelCustom(nn.Module):
 
         return nn.Sequential(*layers)
     
-    def forward(self, image, connections, left_edges, right_edges):
-        cv2.imwrite('test/image.png', (image[0].detach().cpu().numpy().transpose((1, 2, 0))[:, :, :3] * 255).astype(np.uint8))
-        image_x_1 = self.image_layer_1(self.image_layer_0(image))
-        image_x_2 = self.image_layer_2(image_x_1)
-        image_x_3 = self.image_layer_3(image_x_2)
-        image_x_4 = self.image_layer_4(image_x_3)                        
-        x = self.layer_1(connections)
-        x = self.aggregate(x, left_edges, right_edges, image_x_1, connections)
+    def forward(self, image, corners, edges, corner_edge_pairs, edge_corner):
+        #cv2.imwrite('test/image.png', (image[0].detach().cpu().numpy().transpose((1, 2, 0))[:, :, :3] * 255).astype(np.uint8))
+        if 'image' in self.options.suffix:
+            image_x_1 = self.image_layer_1(self.image_layer_0(image))
+            image_x_2 = self.image_layer_2(image_x_1)
+            image_x_3 = self.image_layer_3(image_x_2)
+            image_x_4 = self.image_layer_4(image_x_3)
+        else:
+            image_x_1 = None
+            image_x_2 = None
+            image_x_3 = None
+            image_x_4 = None
+            pass
+        num_corners = len(corners)
+        x = self.layer_1(edges)
+        x = self.aggregate(x, corner_edge_pairs, edge_corner, image_x_1, edges, num_corners)
         x = self.layer_2(x)
-        x = self.aggregate(x, left_edges, right_edges, image_x_2, connections)
+        x = self.aggregate(x, corner_edge_pairs, edge_corner, image_x_2, edges, num_corners)
         x = self.layer_3(x)
-        x = self.aggregate(x, left_edges, right_edges, image_x_3, connections)
+        x = self.aggregate(x, corner_edge_pairs, edge_corner, image_x_3, edges, num_corners)
         x = self.layer_4(x)
-        x = self.aggregate(x, left_edges, right_edges, image_x_4, connections)            
-        connection_pred = self.connection_pred(x)
-        return torch.sigmoid(connection_pred).view(-1)
+        x, corner_features = self.aggregate(x, corner_edge_pairs, edge_corner, image_x_4, edges, num_corners, return_corner_features=True)            
+        edge_pred = torch.sigmoid(self.edge_pred(x), ).view(-1)
+        
+        if 'loop' in self.options.suffix:
+            all_loops = findLoopsModule(edge_pred, edge_corner, num_corners, self.options.max_num_loop_corners)
+
+            loop_features = []
+            loop_corners = []
+            for confidence, loops in all_loops:
+                for loop_index in range(len(loops)):
+                    loop = loops[loop_index]
+                    feature = torch.cat([corner_features[loop], corners[loop], torch.ones((len(loop), 1)).cuda() * confidence[loop_index]], dim=-1)
+                    #print(feature.shape)
+                    if len(feature) < self.options.max_num_loop_corners:
+                        feature = torch.cat([feature, torch.zeros((self.options.max_num_loop_corners - len(feature), feature.shape[1])).cuda()], dim=0)
+                        pass
+                    loop_features.append(feature)
+                    loop_corners.append(loop)
+                    continue
+                continue
+            loop_features = torch.stack(loop_features, dim=0).transpose(1, 2)
+            loop_x = self.loop_encoder(loop_features)
+            loop_x = loop_x.max(2)[0]
+            loop_pred = torch.sigmoid(self.loop_pred(loop_x).view(-1))
+        else:
+            loop_pred = None
+            loop_corners = []
+            pass
+        return edge_pred, loop_pred, loop_corners

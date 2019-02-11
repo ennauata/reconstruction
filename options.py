@@ -42,5 +42,8 @@ def parse_args():
     parser.add_argument('--conv_type', dest='conv_type',
                         help='convolution type for gnn',
                         default='', type=str)
+    parser.add_argument('--max_num_loop_corners', dest='max_num_loop_corners',
+                        help='maximum number of loop corners',
+                        default=10, type=int)
 
     return parser.parse_args()
