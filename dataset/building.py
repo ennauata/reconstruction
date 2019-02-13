@@ -787,7 +787,7 @@ class Building():
             for corner_index_1, corner_index_2 in zip(loop, loop[1:] + loop[:1]):
                 corner_1 = self.corners_det[corner_index_1]
                 corner_2 = self.corners_det[corner_index_2]
-                cv2.line(loop_image, (corner_1[1], corner_1[0]), (corner_2[1], corner_2[0]), thickness=3, color=1)
+                cv2.line(loop_image, (corner_1[1], corner_1[0]), (corner_2[1], corner_2[0]), thickness=3, color=(0, 255, 0))
                 continue
         return loop_image
 

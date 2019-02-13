@@ -1,12 +1,16 @@
 import torch
 
 def findLoopsModule(edge_confidence, edge_corner, num_corners, max_num_loop_corners=10):
+    ## The confidence of connecting two corners
     corner_confidence = torch.zeros(num_corners, num_corners).cuda()
     corner_confidence[edge_corner[:, 0], edge_corner[:, 1]] = edge_confidence
     corner_confidence[edge_corner[:, 1], edge_corner[:, 0]] = edge_confidence
     corner_confidence = corner_confidence - torch.diag(torch.ones(num_corners).cuda()) * max_num_loop_corners
+    
     corner_range = torch.arange(num_corners).cuda().long()
     corner_range_map = corner_range.view((-1, 1)).repeat((1, num_corners))
+
+    ## Paths = [(path_confidence, path_corners)] where the ith path has a length of (i + 1), path_confidence is the summation of confidence along the path between two corners, and path_corners is visited corners along the path
     paths = [(corner_confidence, corner_range_map.unsqueeze(-1))]
     while len(paths) < max_num_loop_corners - 1:
         path_confidence, path_corners = paths[-1]
@@ -22,7 +26,8 @@ def findLoopsModule(edge_confidence, edge_corner, num_corners, max_num_loop_corn
         new_path_corners = torch.cat([existing_path, last_corner.unsqueeze(-1)], dim=-1)
         paths.append((new_path_confidence, new_path_corners))
         continue
-    #print(paths)    
+    #print(paths)
+    ## Find closed loops by adding the starting point to the path
     paths = paths[1:]
     loops = []
     for index, (path_confidence, path_corners) in enumerate(paths):
@@ -36,19 +41,29 @@ def findLoopsModule(edge_confidence, edge_corner, num_corners, max_num_loop_corn
         loop = torch.cat([loop, last_corner.unsqueeze(-1)], dim=-1)
         loop_confidence = loop_confidence.diagonal() / (index + 3)
         mask = loop_confidence > 0
-        loops.append((loop_confidence[mask], loop[mask]))
+        loop_confidence = loop_confidence[mask]
+        loop = loop[mask]
+        if len(loop) > 0:
+            same_mask = torch.abs(loop.unsqueeze(1).unsqueeze(0) - loop.unsqueeze(-1).unsqueeze(1)).min(-1)[0].max(-1)[0] == 0
+            loop_range = torch.arange(len(loop)).long().cuda()
+            same_mask = same_mask & (loop_range.unsqueeze(-1) > loop_range.unsqueeze(0))
+            same_mask = same_mask.max(-1)[0]^1
+            loops.append((loop_confidence[same_mask], loop[same_mask]))
+        else:
+            loops.append((loop_confidence, loop))
+            pass
         continue
     return loops
 
-    #paths = [(path[0], torch.cat([path[1], corner_range_map.transpose(0, 1).unsqueeze(-1)], dim=-1)) for path in paths]
-    loops = []
-    print(paths)
-    for path in paths:
-        confidence = path[0].diagonal()
-        path = path[1].diagonal().transpose(0, 1)
-        mask = confidence > 0
-        loops.append((confidence[mask], path[mask]))
-        continue
-    print(loops)
-    exit(1)
-    return loops
+    # #paths = [(path[0], torch.cat([path[1], corner_range_map.transpose(0, 1).unsqueeze(-1)], dim=-1)) for path in paths]
+    # loops = []
+    # print(paths)
+    # for path in paths:
+    #     confidence = path[0].diagonal()
+    #     path = path[1].diagonal().transpose(0, 1)
+    #     mask = confidence > 0
+    #     loops.append((confidence[mask], path[mask]))
+    #     continue
+    # print(loops)
+    # exit(1)
+    # return loops

@@ -98,8 +98,8 @@ def main(options):
         #valid_list = file_list[:-50]
         pass
 
-    with open('{}/building_reconstruction/la_dataset_new/valid_list.txt'.format(PREFIX)) as f:
-        valid_list = [line.strip() for line in f.readlines()]
+    # with open('{}/building_reconstruction/la_dataset_new/valid_list.txt'.format(PREFIX)) as f:
+    #     valid_list = [line.strip() for line in f.readlines()]
 
     best_score = 0.0
     mt = Metrics()
@@ -196,14 +196,13 @@ def main(options):
                 #print('num edges', len(edge_gt))
 
                 if 'graph' in options.suffix:
-                    edge_pred, loop_pred, loop_corners = model(im_arr.unsqueeze(0), corners, edges, corner_edge_pairs, edge_corner)
+                    edge_pred, loop_pred, loop_corners, loop_info = model(im_arr.unsqueeze(0), corners, edges, corner_edge_pairs, edge_corner)
                 else:
                     if len(edge_gt) > 200:
                         continue
-                    #if len(edge_gt) > 100 and 'sharing' in options.suffix:
-                    #continue                
-                    image_inp = torch.cat([im_arr.unsqueeze(0).repeat((len(edge_images), 1, 1, 1)), edge_images.unsqueeze(1)], dim=1)
-                    edge_pred = model(image_inp, left_edges, right_edges)
+                    if len(edge_gt) > 100 and 'loop' in options.suffix:
+                        continue
+                    edge_pred, loop_pred, loop_corners, loop_info = model(im_arr, edge_images, corners, edge_corner, left_edges, right_edges)
                     pass
 
                 #corner_loss = F.binary_cross_entropy(corner_pred, corner_gt) * 0
@@ -254,6 +253,14 @@ def main(options):
                     #building.update_edges(edge_confidence.detach().cpu().numpy() > 0.5)
                     images, _ = building.visualize(mode='', edge_state=edge_gt.detach().cpu().numpy() > 0.5)
                     cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_input.png', images[0])
+
+                    if 'loop' in options.suffix:
+                        loop_corners = [loop.detach().cpu().numpy() for loop in loop_corners]
+                        image = building.visualizeLoops(loop_corners, loop_pred.detach().cpu().numpy() > 0.5)
+                        cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_loop_pred.png', image)
+                        image = building.visualizeLoops(loop_corners, loop_gt.detach().cpu().numpy() > 0.5)
+                        cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_loop_gt.png', image)
+                        pass
                     pass
                 continue
 
@@ -290,14 +297,13 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
         #edges = torch.cat([edges, edge_confidence.unsqueeze(-1)], dim=-1)
 
         if 'graph' in options.suffix:
-            edge_pred, loop_pred, loop_corners = model(im_arr.unsqueeze(0), corners, edges, edge_pairs, edge_corner)
+            edge_pred, loop_pred, loop_corners, loop_info = model(im_arr.unsqueeze(0), corners, edges, edge_pairs, edge_corner)
         else:
             if len(edge_gt) > 150:
                 #all_images.append(np.zeros((256, 256, 3), dtype=np.uint8))
                 #all_images.append(np.zeros((256, 256, 3), dtype=np.uint8))                
                 continue                
-            image_inp = torch.cat([im_arr.unsqueeze(0).repeat((len(edge_images), 1, 1, 1)), edge_images.unsqueeze(1)], dim=1)
-            edge_pred = model(image_inp, left_edges, right_edges)
+            edge_pred, loop_pred, loop_corners, loop_info = model(im_arr, edge_images, corners, edge_corner, left_edges, right_edges)
             pass
         
         #corner_loss = F.binary_cross_entropy(corner_pred, corner_gt) * 0
@@ -356,6 +362,10 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
             if sample_index % 500 < 16:
                 cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_input.png', images[0])
                 pass
+            if sample_index % 500 < 16:
+                print(index_offset, building._id)
+                np.save(options.test_dir + '/edge_' + building._id + '.png', edge_pred)
+                pass
             row_images.append(images[0])
             
             images, _ = building.visualize(mode='draw_annot', edge_state=edge_pred, building_idx=building_index)                            
@@ -365,6 +375,18 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
             row_images.append(images[0])
 
             if 'loop' in options.suffix:
+                if sample_index == 5 and False:
+                    image = (im_arr[:3].detach().cpu().numpy().transpose((1, 2, 0)) * 255).astype(np.uint8)
+                    print(torch.stack([loop_pred, loop_gt], dim=-1))
+                    for loop_index, loop_mask in enumerate(loop_info.detach().cpu().numpy()):
+                        loop_image = image.copy()
+                        loop_image[loop_mask > 0.5] = np.array([255, 0, 0])
+                        loop_image[loop_mask < -0.5] = np.array([0, 0, 255])                        
+                        #cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_mask_' + str(loop_index) + '.png', (loop_mask * 255).astype(np.uint8))
+                        cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_mask_' + str(loop_index) + '.png', loop_image)
+                        continue
+                    pass
+                
                 loop_corners = [loop.detach().cpu().numpy() for loop in loop_corners]
                 image = building.visualizeLoops(loop_corners, loop_pred.detach().cpu().numpy() > 0.5)
                 if sample_index % 500 < 16:
@@ -375,7 +397,9 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                 if sample_index % 500 < 16:
                     cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_loop_gt.png', image)
                     pass
-                row_images.append(image)                                
+                row_images.append(image)
+                pass
+            
             if visualize:
                 #print(building._id)
                 #np.save('test/confidence.npy', edge_pred)

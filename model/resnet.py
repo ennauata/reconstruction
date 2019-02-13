@@ -29,6 +29,31 @@ def conv1x1(in_planes, out_planes, stride=1):
     return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
 
 
+class LoopRenderer(nn.Module):
+    def __init__(self, width=256, height=256):
+        super(LoopRenderer, self).__init__()
+        U = torch.arange(width).float().cuda().repeat((height, 1))
+        V = torch.arange(height).float().cuda().view((-1, 1)).repeat((1, width))
+        self.UVs = torch.stack([U, V], dim=-1).unsqueeze(-2)
+        self.thickness = 3
+        return
+    
+    def forward(self, corners):
+        corners = torch.stack([corners[:, 1], corners[:, 0]], dim=-1)
+        edges = torch.cat([corners, torch.cat([corners[1:], corners[:1]], dim=0)], dim=-1)
+        #print(corners.shape, edges.shape)
+        edge_normals = edges[:, :2] - edges[:, 2:4]
+        edge_normals = torch.stack([edge_normals[:, 1], -edge_normals[:, 0]], dim=-1)
+        edge_normals = edge_normals / torch.clamp(torch.norm(edge_normals, dim=-1, keepdim=True), min=1e-4)
+        distance_mask = torch.abs(((self.UVs - edges[:, :2]) * edge_normals).sum(-1)) <= self.thickness
+        range_mask = torch.norm(self.UVs - (edges[:, :2] + edges[:, 2:4]) / 2, dim=-1) <= torch.norm(edges[:, 2:4] - edges[:, :2], dim=-1) / 2 + self.thickness
+        edge_mask = (distance_mask & range_mask).max(-1)[0]
+
+        ## Put -1 for loop corners
+        point_mask = (torch.min(torch.norm(self.UVs - edges[:, :2], dim=-1), torch.norm(self.UVs - edges[:, 2:4], dim=-1)) <= self.thickness).max(-1)[0] & edge_mask
+        
+        return edge_mask.float() - point_mask.float() * 2
+    
 class BasicBlock(nn.Module):
     expansion = 1
 
@@ -275,6 +300,8 @@ class ResNetBatch(nn.Module):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
+        return
+    
     def _make_layer(self, block, planes, blocks, stride=1):
         downsample = None
         if stride != 1 or self.inplanes != planes * block.expansion:
@@ -297,35 +324,47 @@ class ResNetBatch(nn.Module):
 
         return nn.Sequential(*layers)
 
-    def aggregate(self, x, left_edges, right_edges):
-        #left_x = torch.zeros(x.shape).cuda()
-        #left_x.index_add_(0, left_edges[:, 0], x[left_edges[:, 1]])
-        count = torch.zeros(len(x)).cuda()
-        count.index_add_(0, left_edges[:, 0], torch.ones(len(left_edges)).cuda())
-        #x.index_add_(0, left_edges[:, 0], x[left_edges[:, 1]] / torch.clamp(count[left_edges[:, 0]], min=1).view((-1, 1, 1, 1)))
-        x = x + torch.stack([x[left_edges[left_edges[:, 0] == edge_index, 1]].mean(0) for edge_index in range(len(x))], dim=0)
-        #count = torch.zeros(len(x)).cuda()
-        #count.index_add_(0, right_edges[:, 0], torch.ones(len(right_edges)).cuda())
-        #x.index_add_(0, right_edges[:, 0], x[right_edges[:, 1]] / torch.clamp(count[right_edges[:, 0]], min=1).view((-1, 1, 1, 1)))
-        x = x + torch.stack([x[right_edges[right_edges[:, 0] == edge_index, 1]].mean(0) for edge_index in range(len(x))], dim=0)
-        #x = x + x.mean(0, keepdim=True)
+    def aggregate(self, x, corner_edge_pairs, edge_corner, num_corners):
+        # #left_x = torch.zeros(x.shape).cuda()
+        # #left_x.index_add_(0, left_edges[:, 0], x[left_edges[:, 1]])
+        # count = torch.zeros(len(x)).cuda()
+        # count.index_add_(0, left_edges[:, 0], torch.ones(len(left_edges)).cuda())
+        # #x.index_add_(0, left_edges[:, 0], x[left_edges[:, 1]] / torch.clamp(count[left_edges[:, 0]], min=1).view((-1, 1, 1, 1)))
+        # x = x + torch.stack([x[left_edges[left_edges[:, 0] == edge_index, 1]].mean(0) for edge_index in range(len(x))], dim=0)
+        # #count = torch.zeros(len(x)).cuda()
+        # #count.index_add_(0, right_edges[:, 0], torch.ones(len(right_edges)).cuda())
+        # #x.index_add_(0, right_edges[:, 0], x[right_edges[:, 1]] / torch.clamp(count[right_edges[:, 0]], min=1).view((-1, 1, 1, 1)))
+        # x = x + torch.stack([x[right_edges[right_edges[:, 0] == edge_index, 1]].mean(0) for edge_index in range(len(x))], dim=0)
+        # #x = x + x.mean(0, keepdim=True)
+
+        #print(x.shape, corner_edge_pairs.shape, corner_edge_pairs.min(0)[0], corner_edge_pairs.max(0)[0], num_corners)
+        corner_features = torch.zeros((num_corners, x.shape[1], x.shape[2], x.shape[3])).cuda()
+        corner_features.index_add_(0, corner_edge_pairs[:, 0], x[corner_edge_pairs[:, 1]])
+        count = torch.zeros(num_corners).cuda()
+        count.index_add_(0, corner_edge_pairs[:, 0], torch.ones(len(corner_edge_pairs)).cuda())
+        corner_features = corner_features / torch.clamp(count.view((-1, 1, 1, 1)), min=1)
+        left_x = corner_features[edge_corner[:, 0]]
+        right_x = corner_features[edge_corner[:, 1]]            
+        #global_x = x.mean(0, keepdim=True).repeat(len(x), 1)
+        global_x = x.mean(0, keepdim=True)
+        x = x + left_x + right_x + global_x        
         return x
-        
-    def forward(self, x, left_edges=None, right_edges=None):
+
+    def forward(self, x, corner_edge_pairs, edge_corner, num_corners, aggregate=False):
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
         x = self.maxpool(x)
 
-        if 'sharing' in self.options.suffix:
+        if aggregate:
             x = self.layer1(x)
-            x = self.aggregate(x, left_edges, right_edges)
+            x = self.aggregate(x, corner_edge_pairs, edge_corner, num_corners)
             x = self.layer2(x)
-            x = self.aggregate(x, left_edges, right_edges)            
+            x = self.aggregate(x, corner_edge_pairs, edge_corner, num_corners)            
             x = self.layer3(x)
-            x = self.aggregate(x, left_edges, right_edges)            
+            x = self.aggregate(x, corner_edge_pairs, edge_corner, num_corners)            
             x = self.layer4(x)
-            x = self.aggregate(x, left_edges, right_edges)            
+            x = self.aggregate(x, corner_edge_pairs, edge_corner, num_corners)            
         else:
             x = self.layer1(x)
             x = self.layer2(x)
@@ -337,7 +376,111 @@ class ResNetBatch(nn.Module):
         x = x.view(x.size(0), -1)
         x = self.fc(x)
 
-        return torch.sigmoid(x).view(-1)
+        pred = torch.sigmoid(x).view(-1)
+        return pred
+
+class ResNetLoop(nn.Module):
+    def __init__(self, options):
+        super(ResNetLoop, self).__init__()
+        self.options = options
+        
+        self.edge_pred = ResNetBatch(options, BasicBlock, [3, 4, 6, 3], num_classes=1)        
+        
+        if options.restore == 0:
+            state_dict = model_zoo.load_url(model_urls['resnet34'])
+            state = self.edge_pred.state_dict()
+            new_state_dict = state
+            for k, v in state_dict.items():
+                if k in state and v.shape == state[k].shape:
+                    new_state_dict[k] = v
+                    continue
+                if len(v.shape) == 4:
+                    if state[k].shape[1] < v.shape[1]:
+                        v = v[:, :state[k].shape[1]]
+                    elif state[k].shape[1] > v.shape[1]:
+                        v = torch.cat([v, v[:, :1].repeat((1, state[k].shape[1] - v.shape[1], 1, 1))], dim=1)
+                        pass
+                    if state[k].shape[0] < v.shape[0]:
+                        new_state_dict[k] = v[:state[k].shape[0]]
+                    elif state[k].shape[0] > v.shape[0]:
+                        new_state_dict[k] = torch.cat([v, v[:1].repeat((state[k].shape[0] - v.shape[0], 1, 1, 1))], dim=0)
+                    else:
+                        new_state_dict[k] = v
+                        pass
+                    pass
+                continue
+            state.update(new_state_dict)
+            self.edge_pred.load_state_dict(state)
+            pass
+
+        self.loop_pred = ResNetBatch(options, BasicBlock, [3, 4, 6, 3], num_classes=1)
+        self.loop_pred.load_state_dict(self.edge_pred.state_dict())
+        
+        self.loop_renderer = LoopRenderer()
+        
+        # if 'loop' in self.options.suffix:
+        #     loop_kernel_size = 7
+        #     self.padding = nn.ReflectionPad1d((loop_kernel_size - 1) // 2)
+        #     self.loop_encoder = nn.Sequential(self.padding, nn.Conv1d(3, 64, loop_kernel_size), nn.ReLU(),
+        #                                    self.padding, nn.Conv1d(64, 64, loop_kernel_size), nn.ReLU(),
+        #                                    self.padding, nn.Conv1d(64, 64, loop_kernel_size), nn.ReLU(),
+        #     )
+        #     self.loop_pred = nn.Sequential(nn.Linear(64, 64), nn.ReLU(), nn.Linear(64, 1))
+        #     pass
+
+        return
+    
+    def forward(self, image, edge_masks, corners=None, corner_edge_pair=None, edge_corner=None):
+        x = torch.cat([image.unsqueeze(0).repeat((len(edge_masks), 1, 1, 1)), edge_masks.unsqueeze(1)], dim=1)
+        num_corners = len(corners)        
+        edge_pred = self.edge_pred(x, corner_edge_pair, edge_corner, num_corners, aggregate='sharing' in self.options.suffix)
+
+        all_loops = findLoopsModule(edge_pred, edge_corner, num_corners, self.options.max_num_loop_corners)
+
+        loop_features = []
+        loop_corners = []
+        max_confidence_loop = (0, None)
+        for confidence, loops in all_loops:
+            for loop_index in range(len(loops)):
+                loop = loops[loop_index]
+                # feature = torch.cat([corners[loop], torch.ones((len(loop), 1)).cuda() * confidence[loop_index]], dim=-1)
+                # #print(feature.shape)
+                # if len(feature) < self.options.max_num_loop_corners:
+                #     feature = torch.cat([feature, torch.zeros((self.options.max_num_loop_corners - len(feature), feature.shape[1])).cuda()], dim=0)
+                #     pass
+                # loop_features.append(feature)
+                conf = confidence[loop_index].item()
+                if conf > max_confidence_loop[0]:
+                    max_confidence_loop = (conf, loop)
+                    pass
+                if conf < 0.5:
+                    continue
+                #print('corner', corners.shape, corners.dtype, loop.shape, corners[loop].shape)
+                edge_mask = self.loop_renderer(corners[loop] * 256)
+
+                #cv2.imwrite('test/edge_mask.png', (edge_mask.detach().cpu().numpy() * 255).astype(np.uint8))
+                #exit(1)
+
+                loop_features.append(edge_mask)
+                loop_corners.append(loop)
+                continue
+            continue
+        # loop_features = torch.stack(loop_features, dim=0).transpose(1, 2)
+        # loop_x = self.loop_encoder(loop_features)
+        # loop_x = loop_x.max(2)[0]
+        # loop_pred = torch.sigmoid(self.loop_pred(loop_x).view(-1))
+        if len(loop_features) == 0:
+            #print('max corner', corners.shape, max_confidence_loop[1], corners[max_confidence_loop[1]].shape)                
+            edge_mask = self.loop_renderer(corners[max_confidence_loop[1]] * 256)
+            loop_features.append(edge_mask)
+            loop_corners.append(max_confidence_loop[1])
+            pass
+        loop_features = torch.stack(loop_features)
+        x = torch.cat([image.unsqueeze(0).repeat((len(loop_features), 1, 1, 1)), loop_features.unsqueeze(1)], dim=1)
+        #print(x.shape, edge_pred.shape)
+        #exit(1)
+        loop_pred = self.loop_pred(x, corner_edge_pair, edge_corner, num_corners)
+        return edge_pred, loop_pred, loop_corners, loop_features
 
 def create_model(options):
     """Constructs a ResNet-34 model.
@@ -369,6 +512,7 @@ def create_model(options):
                     pass
                 pass
             continue
+        state.update(new_state_dict)        
         model.load_state_dict(state)
         pass
     return model
@@ -384,7 +528,7 @@ class GraphModelCustom(nn.Module):
         self.layer_3 = nn.Sequential(nn.Linear(128, 64), nn.BatchNorm1d(64), nn.ReLU())
         self.layer_4 = nn.Sequential(nn.Linear(256, 128), nn.BatchNorm1d(128), nn.ReLU())
 
-        if 'image' in self.options.suffix:
+        if 'image_only' in self.options.suffix:
             self.inplanes = 64
         else:
             self.inplanes = 16
@@ -522,4 +666,4 @@ class GraphModelCustom(nn.Module):
             loop_pred = None
             loop_corners = []
             pass
-        return edge_pred, loop_pred, loop_corners
+        return edge_pred, loop_pred, loop_corners, loop_features
