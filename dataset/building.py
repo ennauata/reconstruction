@@ -21,6 +21,71 @@ def draw_edge(edge_index, edges):
     cv2.line(im, (edge[1], edge[0]), (edge[3], edge[2]), thickness=3, color=1)
     return im
 
+def findLoopsModuleCPU(edge_confidence, edge_corner, num_corners, max_num_loop_corners=10, confidence_threshold=0):
+    ## The confidence of connecting two corners
+    corner_confidence = torch.zeros(num_corners, num_corners)
+    corner_confidence[edge_corner[:, 0], edge_corner[:, 1]] = edge_confidence
+    corner_confidence[edge_corner[:, 1], edge_corner[:, 0]] = edge_confidence
+    corner_confidence = corner_confidence - torch.diag(torch.ones(num_corners)) * max_num_loop_corners
+    
+    corner_range = torch.arange(num_corners).long()
+    corner_range_map = corner_range.view((-1, 1)).repeat((1, num_corners))
+
+    ## Paths = [(path_confidence, path_corners)] where the ith path has a length of (i + 1), path_confidence is the summation of confidence along the path between two corners, and path_corners is visited corners along the path
+    paths = [(corner_confidence, corner_range_map.unsqueeze(-1))]
+    while len(paths) < max_num_loop_corners - 1:
+        path_confidence, path_corners = paths[-1]
+        total_confidence = path_confidence.unsqueeze(-1) + corner_confidence
+        prev_corner = path_corners[:, :, -1]
+        visited_mask = (path_corners.unsqueeze(-1) == corner_range).max(-2)[0].float()
+        #visited_mask = torch.max(visited_mask, (prev_corner.unsqueeze(1) == corner_range.unsqueeze(-1)).float())
+        total_confidence = total_confidence * (1 - visited_mask) - (max_num_loop_corners) * visited_mask
+        #print(path_confidence, total_confidence, visited_mask)        
+        #print(total_confidence, visited_mask)
+        new_path_confidence, last_corner = total_confidence.max(1)
+        existing_path = path_corners[corner_range_map.view(-1), last_corner.view(-1)].view((num_corners, num_corners, -1))
+        new_path_corners = torch.cat([existing_path, last_corner.unsqueeze(-1)], dim=-1)
+        paths.append((new_path_confidence, new_path_corners))
+        continue
+    #print(paths)
+    ## Find closed loops by adding the starting point to the path
+    paths = paths[1:]
+    loops = []
+    max_confidence_loop = (0, None)
+    for index, (path_confidence, path_corners) in enumerate(paths):
+        total_confidence = path_confidence.unsqueeze(-1) + corner_confidence
+        visited_mask = (path_corners[:, :, 1:].unsqueeze(-1) == corner_range).float().max(-2)[0]
+        total_confidence = total_confidence * (1 - visited_mask) - (max_num_loop_corners) * visited_mask
+        #print(total_confidence, visited_mask)
+        loop_confidence, last_corner = total_confidence.max(1)
+        last_corner = last_corner.diagonal()
+        loop = path_corners[corner_range, last_corner].view((num_corners, -1))
+        loop = torch.cat([loop, last_corner.unsqueeze(-1)], dim=-1)
+        loop_confidence = loop_confidence.diagonal() / (index + 3)
+        mask = loop_confidence > confidence_threshold
+        if mask.sum().item() == 0:
+            loop_confidence, index = loop_confidence.max(0, keepdim=True)
+            index = index.squeeze().item()
+            if loop_confidence.item() > max_confidence_loop[0]:
+                max_confidence_loop = (loop_confidence.item(), loop[index:index + 1])
+                pass
+        else:
+            loop_confidence = loop_confidence[mask]
+            loop = loop[mask]
+            if len(loop) > 0:
+                same_mask = torch.abs(loop.unsqueeze(1).unsqueeze(0) - loop.unsqueeze(-1).unsqueeze(1)).min(-1)[0].max(-1)[0] == 0
+                loop_range = torch.arange(len(loop)).long()
+                same_mask = same_mask & (loop_range.unsqueeze(-1) > loop_range.unsqueeze(0))
+                same_mask = same_mask.max(-1)[0]^1
+                loops.append(loop[same_mask])
+                pass
+            pass
+        continue
+    if len(loops) == 0:
+        loops.append(max_confidence_loop[1])
+        pass
+    return loops
+
 class Building():
     """Maintain a building to create data examples in the same format"""
 
@@ -171,7 +236,7 @@ class Building():
             pass
         imgs = imgs.transpose((2, 0, 1)).astype(np.float32) / 255
         
-        img_c = self.compute_corner_image(corners_det)
+        img_c, corner_masks = self.compute_corner_image(corners_det)
         imgs = np.concatenate([imgs, np.array(img_c)[np.newaxis, :, :]], axis=0)
 
         if edge_index < 0:
@@ -240,7 +305,7 @@ class Building():
 
         imgs = imgs.transpose((2, 0, 1)).astype(np.float32) / 255
         if load_heatmaps:
-            img_c = self.compute_corner_image(corners_det)
+            img_c, corner_masks = self.compute_corner_image(corners_det)
             imgs = np.concatenate([imgs, np.array(img_c)[np.newaxis, :, :]], axis=0)
 
             edge_images = []
@@ -249,7 +314,7 @@ class Building():
                 continue
             edge_images = np.stack(edge_images, axis=0)
             #return [imgs.astype(np.float32), edge_images.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.graph_edge_index, self.graph_edge_attr, self.left_edges.astype(np.int64), self.right_edges.astype(np.int64)]
-            return [imgs.astype(np.float32), edge_images.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.corner_edge_pairs, self.edge_corner, self.left_edges.astype(np.int64), self.right_edges.astype(np.int64)]
+            return [imgs.astype(np.float32), corner_masks.astype(np.float32), edge_images.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.corner_edge_pairs, self.edge_corner, self.left_edges.astype(np.int64), self.right_edges.astype(np.int64)]
         else:
             return [imgs.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.graph_edge_index, self.graph_edge_attr]
 
@@ -267,7 +332,7 @@ class Building():
             pass
 
         imgs = imgs.transpose((2, 0, 1)).astype(np.float32) / 255
-        img_c = self.compute_corner_image(corners_det)
+        img_c, corner_masks = self.compute_corner_image(corners_det)
         imgs = np.concatenate([imgs, np.array(img_c)[np.newaxis, :, :]], axis=0)
 
         edge_image = draw_edge(edge_index, edges_det)
@@ -313,13 +378,13 @@ class Building():
         return np.all(self.predicted_edges[-1] == self.edges_gt)
 
     def compute_corner_image(self, corners):
-        im_c = np.zeros((256, 256))
-        for c in corners:
-            cv2.circle(im_c, (c[1], c[0]), color=1, radius=5, thickness=-1)
+        im_c = np.zeros((len(corners), 256, 256))
+        for corner_index, c in enumerate(corners):
+            cv2.circle(im_c[corner_index], (c[1], c[0]), color=1, radius=5, thickness=-1)
             # x, y, _, _ = np.array(c)
             # x, y = int(x), int(y)
             # im_c[x, y] = 1
-        return im_c
+        return im_c.max(0), im_c
 
     def read_input_images(self, _id, path):
 
@@ -731,7 +796,7 @@ class Building():
 
     def visualize(self, mode='last_mistake', edge_state=None, building_idx=None, post_processing=False):
         image = self.imgs.copy()        
-        corner_image = self.compute_corner_image(self.corners_det)
+        corner_image, corner_masks = self.compute_corner_image(self.corners_det)
         image[corner_image > 0.5] = np.array([255, 0, 0], dtype=np.uint8)
         edge_image = image.copy()
         if 'last' in mode:
@@ -763,7 +828,7 @@ class Building():
             pass
 
         if 'draw_annot' in mode:    
-            corner_annot = self.compute_corner_image(np.array(self.corners_annot).astype('int'))
+            corner_annot, corner_masks = self.compute_corner_image(np.array(self.corners_annot).astype('int'))
             corner_image_annot = self.imgs.copy()
             corner_image_annot[corner_annot > 0.5] = np.array([255, 0, 0], dtype=np.uint8)
             images.append(corner_image_annot)
@@ -777,7 +842,7 @@ class Building():
 
     def visualizeLoops(self, loop_corners, loop_state):
         image = self.imgs.copy()        
-        corner_image = self.compute_corner_image(self.corners_det)
+        corner_image, corner_masks = self.compute_corner_image(self.corners_det)
         image[corner_image > 0.5] = np.array([255, 0, 0], dtype=np.uint8)
         loop_image = image.copy()
         for loop, state in zip(loop_corners, loop_state.tolist()):
@@ -1065,3 +1130,16 @@ class Building():
             continue
 
         return edge_groups
+    
+    def find_loops(self):
+        all_loops = findLoopsModuleCPU(torch.from_numpy(self.edges_gt.astype(np.float32)), torch.from_numpy(self.edge_corner), len(self.corners_gt), max_num_loop_corners=20, confidence_threshold=0.99)        
+        loop_corners = []
+        for loops in all_loops:
+            loops = loops.detach().cpu().numpy()
+            for loop in loops:
+                #print(loop)
+                loop_corners.append(self.corners_det[loop])
+                continue
+            continue
+        #print(self.edges_gt)        
+        return loop_corners

@@ -116,6 +116,7 @@ class DRN(nn.Module):
         self.out_map = out_map
         self.out_dim = channels[-1]
         self.out_middle = out_middle
+        self.num_classes = num_classes
         self.arch = arch
 
         if arch == 'C':
@@ -246,12 +247,34 @@ class DRN(nn.Module):
             x = self.layer8(x)
             y.append(x)
 
-        if self.out_map:
-            x = self.fc(x)
+        if self.out_map > 0:
+            if self.num_classes > 0:
+                if self.out_map == x.shape[2]:
+                    x = self.pred(x)
+                elif self.out_map > x.shape[2]:
+                    x = self.pred(x)
+                    x = F.upsample(input=x, size=(self.out_map, self.out_map), mode='bilinear')
+                else:
+                    x = self.out_pool(x)
+                    y.append(x)
+                    x = self.pred(x)
+                    pass
+            else:
+                if self.out_map > x.shape[3]:
+                    x = F.upsample(input=x, size=(self.out_map, self.out_map), mode='bilinear')
+                    pass
+                pass
         else:
             x = self.avgpool(x)
-            x = self.fc(x)
+            x = self.pred(x)
             x = x.view(x.size(0), -1)
+            pass
+        # if self.out_map:
+        #     x = self.fc(x)
+        # else:
+        #     x = self.avgpool(x)
+        #     x = self.fc(x)
+        #     x = x.view(x.size(0), -1)
 
         if self.out_middle:
             return x, y
@@ -307,12 +330,22 @@ def drn_d_40(pretrained=False, **kwargs):
     return model
 
 
-def drn_d_54(pretrained=False, **kwargs):
-    model = DRN(Bottleneck, [1, 1, 3, 4, 6, 3, 1, 1], arch='D', **kwargs)
-    if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['drn-d-54']))
-    return model
+# def drn_d_54(pretrained=False, **kwargs):
+#     model = DRN(Bottleneck, [1, 1, 3, 4, 6, 3, 1, 1], arch='D', **kwargs)
+#     if pretrained:
+#         model.load_state_dict(model_zoo.load_url(model_urls['drn-d-54']))
+#     return model
 
+def drn_d_54(pretrained=False, out_map=256, num_classes=20, **kwargs):
+    model = DRN(Bottleneck, [1, 1, 3, 4, 6, 3, 1, 1], arch='D', out_map=out_map, num_classes=num_classes, input_channels=5, **kwargs)
+    if pretrained:
+        pretrained_dict = model_zoo.load_url(model_urls['drn-d-54'])
+        state = model.state_dict()        
+        pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in state and v.shape == state[k].shape}
+        state.update(pretrained_dict)
+        model.load_state_dict(state)
+        pass
+    return model
 
 def drn_d_56(pretrained=False, **kwargs):
     model = DRN(Bottleneck, [1, 1, 3, 4, 6, 3, 2, 2], arch='D', **kwargs)

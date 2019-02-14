@@ -47,6 +47,7 @@ def main(options):
         edge_corner = building.edge_corner
         print(edge_corner)
         loops = findLoopsModule(torch.from_numpy(edge_confidence).cuda(), torch.from_numpy(edge_corner).cuda(), len(building.corners_gt), max_num_loop_corners=4)
+
         print(loops)
         exit(1)
         images, _ = building.visualize(mode='', edge_state=edge_state)
@@ -191,7 +192,7 @@ def main(options):
             optimizer.zero_grad()        
             for sample_index, sample in enumerate(data_iterator):
 
-                im_arr, edge_images, corners, edges, corner_gt, edge_gt, corner_edge_pairs, edge_corner, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(), sample[9].cuda().squeeze(), sample[10].squeeze().item()
+                im_arr, corner_images, edge_images, corners, edges, corner_gt, edge_gt, corner_edge_pairs, edge_corner, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(), sample[9].cuda().squeeze(), sample[10].cuda().squeeze(), sample[11].squeeze().item()
 
                 #print('num edges', len(edge_gt))
 
@@ -292,7 +293,7 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
     all_images = []
     row_images = []    
     for sample_index, sample in enumerate(data_iterator):
-        im_arr, edge_images, corners, edges, corner_gt, edge_gt, edge_pairs, edge_corner, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(0), sample[9].cuda().squeeze(), sample[10].squeeze().item()
+        im_arr, corner_images, edge_images, corners, edges, corner_gt, edge_gt, edge_pairs, edge_corner, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(0), sample[9].cuda().squeeze(), sample[10].cuda().squeeze(), sample[11].squeeze().item()
         #edge_confidence = validator.validate(dset_train.buildings[building_index])
         #edges = torch.cat([edges, edge_confidence.unsqueeze(-1)], dim=-1)
 

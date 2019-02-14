@@ -1,6 +1,6 @@
 import torch
 
-def findLoopsModule(edge_confidence, edge_corner, num_corners, max_num_loop_corners=10):
+def findLoopsModule(edge_confidence, edge_corner, num_corners, max_num_loop_corners=10, confidence_threshold=0):
     ## The confidence of connecting two corners
     corner_confidence = torch.zeros(num_corners, num_corners).cuda()
     corner_confidence[edge_corner[:, 0], edge_corner[:, 1]] = edge_confidence
@@ -40,7 +40,12 @@ def findLoopsModule(edge_confidence, edge_corner, num_corners, max_num_loop_corn
         loop = path_corners[corner_range, last_corner].view((num_corners, -1))
         loop = torch.cat([loop, last_corner.unsqueeze(-1)], dim=-1)
         loop_confidence = loop_confidence.diagonal() / (index + 3)
-        mask = loop_confidence > 0
+        mask = loop_confidence > confidence_threshold
+        if mask.sum().item() == 0:
+            loop_confidence, index = loop_confidence.max(0, keepdim=True)
+            index = index.squeeze().item()
+            loops.append((loop_confidence, loop[index:index + 1]))
+            pass
         loop_confidence = loop_confidence[mask]
         loop = loop[mask]
         if len(loop) > 0:
@@ -67,3 +72,60 @@ def findLoopsModule(edge_confidence, edge_corner, num_corners, max_num_loop_corn
     # print(loops)
     # exit(1)
     # return loops
+
+
+## The pyramid module from pyramid scene parsing
+class PyramidModule(torch.nn.Module):
+    def __init__(self, options, in_planes, middle_planes, scales=[32, 16, 8, 4]):
+        super(PyramidModule, self).__init__()
+        
+        self.pool_1 = torch.nn.AvgPool2d((scales[0], scales[0]))
+        self.pool_2 = torch.nn.AvgPool2d((scales[1], scales[1]))        
+        self.pool_3 = torch.nn.AvgPool2d((scales[2], scales[2]))
+        self.pool_4 = torch.nn.AvgPool2d((scales[3], scales[3]))        
+        self.conv_1 = ConvBlock(in_planes, middle_planes, kernel_size=1)
+        self.conv_2 = ConvBlock(in_planes, middle_planes, kernel_size=1)
+        self.conv_3 = ConvBlock(in_planes, middle_planes, kernel_size=1)
+        self.conv_4 = ConvBlock(in_planes, middle_planes, kernel_size=1)
+        self.upsample = torch.nn.Upsample(size=(scales[0], scales[0]), mode='bilinear')
+        return
+    
+    def forward(self, inp):
+        x_1 = self.upsample(self.conv_1(self.pool_1(inp)))
+        x_2 = self.upsample(self.conv_2(self.pool_2(inp)))
+        x_3 = self.upsample(self.conv_3(self.pool_3(inp)))
+        x_4 = self.upsample(self.conv_4(self.pool_4(inp)))
+        out = torch.cat([inp, x_1, x_2, x_3, x_4], dim=1)
+        return out
+
+## Conv + bn + relu
+class ConvBlock(torch.nn.Module):
+    def __init__(self, in_planes, out_planes, kernel_size=3, stride=1, padding=None, mode='conv'):
+        super(ConvBlock, self).__init__()
+       
+        if padding == None:
+            padding = (kernel_size - 1) // 2
+            pass
+        if mode == 'conv':
+            self.conv = torch.nn.Conv2d(in_planes, out_planes, kernel_size=kernel_size, stride=stride, padding=padding, bias=False)
+        elif mode == 'deconv':
+            self.conv = torch.nn.ConvTranspose2d(in_planes, out_planes, kernel_size=kernel_size, stride=stride, padding=padding, bias=False)
+        elif mode == 'conv_3d':
+            self.conv = torch.nn.Conv3d(in_planes, out_planes, kernel_size=kernel_size, stride=stride, padding=padding, bias=False)
+        elif mode == 'deconv_3d':
+            self.conv = torch.nn.ConvTranspose3d(in_planes, out_planes, kernel_size=kernel_size, stride=stride, padding=padding, bias=False)
+        else:
+            print('conv mode not supported', mode)
+            exit(1)
+            pass
+        if '3d' not in mode:
+            self.bn = torch.nn.BatchNorm2d(out_planes)
+        else:
+            self.bn = torch.nn.BatchNorm3d(out_planes)
+            pass
+        self.relu = torch.nn.ReLU(inplace=True)
+        return
+   
+    def forward(self, inp):
+        #return self.relu(self.conv(inp))       
+        return self.relu(self.bn(self.conv(inp)))    
