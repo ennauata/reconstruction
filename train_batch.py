@@ -17,7 +17,6 @@ from model.graph_model import GraphModel
 from dataset.collate import PadCollate
 from utils.losses import balanced_binary_cross_entropy
 import os
-from dataset.metrics import Metrics
 from collections import OrderedDict
 import cv2
 from tqdm import tqdm
@@ -26,6 +25,8 @@ from validator import Validator
 from options import parse_args
 from model.resnet import create_model, GraphModelCustom
 from model.modules import findLoopsModule
+from dataset.metrics import Metrics
+
 
 def main(options):
     ##############################################################################################################
@@ -101,9 +102,6 @@ def main(options):
 
     # with open('{}/building_reconstruction/la_dataset_new/valid_list.txt'.format(PREFIX)) as f:
     #     valid_list = [line.strip() for line in f.readlines()]
-
-    best_score = 0.0
-    mt = Metrics()
 
     ##############################################################################################################
     ############################################### Start Training ###############################################
@@ -283,7 +281,7 @@ def main(options):
 
 def testOneEpoch(options, model, dataset, additional_models=[], visualize=False):
     #model.eval()
-    
+    mt = Metrics()
     epoch_losses = []
     ## Same with train_loader but provide progress bar
     data_loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=1)    
@@ -342,8 +340,9 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
         lengths = lengths.astype('int32')
 
         edge_pred = edge_pred.detach().cpu().numpy()
-
         edge_gt = edge_gt.detach().cpu().numpy() > 0.5
+
+        ## Compute metrics
         statistics[0] += np.logical_and(edge_pred > 0.5, edge_gt == 1).sum()
         statistics[1] += np.logical_and(edge_pred < 0.5, edge_gt == 1).sum()                  
         statistics[2] += np.logical_and(edge_pred > 0.5, edge_gt == 0).sum()                  
@@ -355,9 +354,12 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
         statistics_per_length[lengths, 2] += np.logical_and(edge_pred > 0.5, edge_gt == 0).sum()                  
         statistics_per_length[lengths, 3] += np.logical_and(edge_pred < 0.5, edge_gt == 0).sum()
 
+        building = dataset.buildings[building_index]
+        mt.forward_corners(building)
+        mt.forward_loops(building, edge_pred)
+
         if sample_index % 500 < 16 or visualize:
             index_offset = sample_index % 500
-            building = dataset.buildings[building_index]
 
             images, _ = building.visualize(mode='draw_annot', edge_state=edge_gt, building_idx=building_index)                            
             if sample_index % 500 < 16:
@@ -436,11 +438,12 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
         cv2.imwrite(options.test_dir + '/results.png', image)        
         pass
 
+    ## Print statistics
     print('statistics', statistics[0] / (statistics[0] + statistics[1]), statistics[3] / (statistics[2] + statistics[3]), statistics[4] / statistics[5], statistics[5])
     # for i in range(350):
     #     if (statistics_per_length[i, 0] + statistics_per_length[i, 1] > 0) and (statistics_per_length[i, 2] + statistics_per_length[i, 3] > 0): 
     #         print('{}, {}, {}'.format(i+1, statistics_per_length[i, 0] / (statistics_per_length[i, 0] + statistics_per_length[i, 1] + 1E-10), statistics_per_length[i, 3] / (statistics_per_length[i, 2] + statistics_per_length[i, 3] + 1E-10)))
-
+    mt.print_metrics()
     print('validation loss', np.array(epoch_losses).mean(0))
     model.train()
     return
