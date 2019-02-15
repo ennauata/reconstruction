@@ -201,7 +201,8 @@ def main(options):
                         continue
                     if len(edge_gt) > 100 and 'loop' in options.suffix:
                         continue
-                    edge_pred, loop_pred, loop_corners, loop_info = model(im_arr, edge_images, corners, edge_corner, left_edges, right_edges)
+                    image_inp = torch.cat([im_arr.unsqueeze(0).repeat((len(edge_images), 1, 1, 1)), edge_images.unsqueeze(1)], dim=1)                    
+                    edge_pred = model(image_inp, corner_edge_pairs, edge_corner, num_corners=len(corners))
                     pass
 
                 #corner_loss = F.binary_cross_entropy(corner_pred, corner_gt) * 0
@@ -291,7 +292,7 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
     all_images = []
     row_images = []    
     for sample_index, sample in enumerate(data_iterator):
-        im_arr, corner_images, edge_images, corners, edges, corner_gt, edge_gt, edge_pairs, edge_corner, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(0), sample[9].cuda().squeeze(), sample[10].cuda().squeeze(), sample[11].squeeze().item()
+        im_arr, corner_images, edge_images, corners, edges, corner_gt, edge_gt, corner_edge_pairs, edge_corner, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(0), sample[9].cuda().squeeze(), sample[10].cuda().squeeze(), sample[11].squeeze().item()
         #edge_confidence = validator.validate(dset_train.buildings[building_index])
         #edges = torch.cat([edges, edge_confidence.unsqueeze(-1)], dim=-1)
 
@@ -301,8 +302,10 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
             if len(edge_gt) > 150:
                 #all_images.append(np.zeros((256, 256, 3), dtype=np.uint8))
                 #all_images.append(np.zeros((256, 256, 3), dtype=np.uint8))                
-                continue                
-            edge_pred, loop_pred, loop_corners, loop_info = model(im_arr, edge_images, corners, edge_corner, left_edges, right_edges)
+                continue
+            image_inp = torch.cat([im_arr.unsqueeze(0).repeat((len(edge_images), 1, 1, 1)), edge_images.unsqueeze(1)], dim=1)                    
+            edge_pred = model(image_inp, corner_edge_pairs, edge_corner, num_corners=len(corners))            
+            #edge_pred, loop_pred, loop_corners, loop_info = model(im_arr, edge_images, corners, edge_corner)
             pass
         
         #corner_loss = F.binary_cross_entropy(corner_pred, corner_gt) * 0
@@ -413,7 +416,7 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                 pass
 
             for additional_model in additional_models:
-                edge_pred = additional_model(image_inp, left_edges, right_edges)
+                edge_pred = additional_model(image_inp, corner_edge_pairs, edge_corner, num_corners=len(corners))
                 edge_pred = edge_pred.detach().cpu().numpy()
                 images, _ = building.visualize(mode='draw_annot', edge_state=edge_pred, building_idx=building_index)
                 row_images.append(images[0])
