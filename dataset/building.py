@@ -127,6 +127,7 @@ class Building():
         #print(rot, flip)
         # load annots
         corners_annot, edges_annot = self.load_annot(graph, rot, flip)
+        edge_corner_annots = self.compute_edge_corner_from_annots(corners_annot, edges_annot)
 
         # retrieve corners and edges detections
         corners_path = os.path.join(self.corners_folder, "{}_{}_{}.npy".format(_id, rot, flip))
@@ -156,7 +157,6 @@ class Building():
         #ce_t0[inds] = 1.0
         corner_edge, corner_edge_pairs, edge_corner = self.compute_dists(corners_det, edges_det_from_corners, ce_assignment)
 
-        
         #ce_angles_bins, ca_gt = self.compute_corner_angle_bins(corner_edge, edges_det_from_corners, edges_gt, corners_det)
         ce_angles_bins = None
 
@@ -164,6 +164,7 @@ class Building():
         imgs = self.read_input_images(_id, self.dataset_folder)
 
         self.imgs = imgs
+        self.edge_corner_annots = edge_corner_annots
         self.corners_gt = corners_gt                
         self.corners_det = np.round(corners_det[:, :2]).astype(np.int32)
         self.edges_gt = edges_gt
@@ -205,6 +206,22 @@ class Building():
             exit(1)
             pass
         return
+
+    def compute_edge_corner_from_annots(self, corners_annot, edges_annot):
+        corners_annot = np.array(corners_annot).astype('float32')
+        edges_annot = np.array(edges_annot).astype('float32')
+        edge_corner_annots = []
+
+        for e in edges_annot:
+            c1, c2 = e[:2], e[2:]
+            e_inds = []
+            for k, c3 in enumerate(corners_annot):
+                c3 = c3[:2]
+                if np.array_equal(c3, c1) or np.array_equal(c3, c2):
+                    e_inds.append(k)
+            edge_corner_annots.append(e_inds)
+
+        return np.array(edge_corner_annots)
 
     def create_samples(self, num_edges_source=-1, mode='inference'):
         """Create all data examples:
@@ -579,7 +596,8 @@ class Building():
                         pass
                     edge_corner[j].append(i)
         corner_edge_pairs = np.array(corner_edge_pairs)
-        edge_corner = np.array(list(edge_corner.values()))                    
+        edge_corner = np.array(list(edge_corner.values()))
+
         return r_dist, corner_edge_pairs, edge_corner
 
     def compute_corner_angle_bins(self, ce_mat, edges_det, edges_gt, corners_det, n_bins=72, delta_degree=5.0):
@@ -1131,15 +1149,14 @@ class Building():
 
         return edge_groups
     
-    def find_loops(self):
-        all_loops = findLoopsModuleCPU(torch.from_numpy(self.edges_gt.astype(np.float32)), torch.from_numpy(self.edge_corner), len(self.corners_gt), max_num_loop_corners=20, confidence_threshold=0.99)        
+    def find_loops(self, current_edges, edge_corner, corners, num_corners):
+        all_loops = findLoopsModuleCPU(torch.from_numpy(current_edges.astype(np.float32)), torch.from_numpy(edge_corner), num_corners, max_num_loop_corners=20, confidence_threshold=0.99)        
         loop_corners = []
         for loops in all_loops:
             loops = loops.detach().cpu().numpy()
             for loop in loops:
                 #print(loop)
-                loop_corners.append(self.corners_det[loop])
+                loop_corners.append(corners[loop])
                 continue
             continue
-        #print(self.edges_gt)        
         return loop_corners
