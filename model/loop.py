@@ -100,24 +100,24 @@ class LoopModule(nn.Module):
             pass
         return x
 
-    def aggregate_loop(image_x, coord_x, edge_pred, loop_pred， corner_edge_pairs, edge_corner, num_corners):
+    def aggregate_loop(image_x, coord_x, edge_pred, loop_pred， corners, corner_edge_pairs, edge_corner, num_corners):
         edge_x = torch.cat([image_x.max(-1, keepdim=True)[0].max(-2, keepdim=True)[0], coord_x], dim=1)
+        edge_confidence = torch.sigmoid(edge_pred(edge_x))
+        
+        all_loops = findLoopsModule(edge_confidence, edge_corner, num_corners, self.options.max_num_loop_corners, corners=corners, disable_colinear=True)
 
-        corner_features = torch.zeros((num_corners, x.shape[1])).cuda()
+        corner_features = torch.zeros((num_corners, x.shape[1], x.shape[2], x.shape[3])).cuda()
         corner_features.index_add_(0, corner_edge_pairs[:, 0], x[corner_edge_pairs[:, 1]])
         count = torch.zeros(num_corners).cuda()
         count.index_add_(0, corner_edge_pairs[:, 0], torch.ones(len(corner_edge_pairs)).cuda())
-        corner_features = corner_features / torch.clamp(count.view((-1, 1)), min=1)        
-        
-        edge_pred = edge_pred(edge_x)
-        all_loops = findLoopsModule(edge_pred, edge_corner, num_corners, self.options.max_num_loop_corners, corners=corners, disable_colinear=True)
-        
+        corner_features = corner_features / torch.clamp(count.view((-1, 1, 1, 1)), min=1)
+
         loop_features = []
         loop_corners = []
         for confidence, loops in all_loops:
             for loop_index in range(len(loops)):
                 loop = loops[loop_index]
-                feature = torch.cat([corner_features[loop], corners[loop], torch.ones((len(loop), 1)).cuda() * confidence[loop_index]], dim=-1)
+                feature = torch.cat([corner_features[loop].max(0)[0], corners[loop].view(-1)], dim=-1)
                     #print(feature.shape)
                     if len(feature) < self.options.max_num_loop_corners:
                         feature = torch.cat([feature, torch.zeros((self.options.max_num_loop_corners - len(feature), feature.shape[1])).cuda()], dim=0)
