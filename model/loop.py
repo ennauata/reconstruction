@@ -5,10 +5,25 @@ import cv2
 import numpy as np
 from model.modules import findLoopsModule
 
-
-class LoopModule(nn.Module):
+class LoopEncoder(nn.Module):
+    def __init__(self, num_input_channels):
+        super(LoopEncoder, self).__init__()
+        self.padding = nn.ReflectionPad1d((loop_kernel_size - 1) // 2)
+        self.conv_0 = nn.Sequential(self.padding, nn.Conv1d(num_input_channels, 64, kernel_size=3), nn.ReLU(inplace=True))
+        self.conv_1 = nn.Sequential(self.padding, nn.Conv1d(64, 64, kernel_size=3), nn.ReLU(inplace=True))
+        self.conv_2 = nn.Sequential(self.padding, nn.Conv1d(64, 64, kernel_size=3), nn.ReLU(inplace=True))
+        return
+    
+    def forward(self, x):
+        x = self.conv_0(x)
+        x = self.conv_1(x)
+        x = self.conv_2(x)
+        x = x.max(-1)[0]
+        return x
+        
+class LoopModel(nn.Module):
     def __init__(self, options, num_classes=1):
-        super(ResNetBatch, self).__init__()
+        super(LoopModel, self).__init__()
         self.options = options
         self.inplanes = 64
 
@@ -37,6 +52,12 @@ class LoopModule(nn.Module):
         self.edge_pred_2 = nn.Sequential(nn.Linear(256, 64), nn.ReLU(), nn.Linear(64, 1))
         self.edge_pred_3 = nn.Sequential(nn.Linear(512, 64), nn.ReLU(), nn.Linear(64, 1))
         self.edge_pred_4 = nn.Sequential(nn.Linear(1024, 64), nn.ReLU(), nn.Linear(64, 1))
+
+        self.coord_encoder_1 = nn.Sequential(nn.Conv1d(128, 64), nn.ReLU(), nn.Linear(64, 1))
+        self.edge_pred_2 = nn.Sequential(nn.Linear(256, 64), nn.ReLU(), nn.Linear(64, 1))
+        self.edge_pred_3 = nn.Sequential(nn.Linear(512, 64), nn.ReLU(), nn.Linear(64, 1))
+        self.edge_pred_4 = nn.Sequential(nn.Linear(1024, 64), nn.ReLU(), nn.Linear(64, 1))
+
         
         self.image_aggregate_1 = nn.Sequential(nn.Conv2d(64 * 4, 64, kernel_size=1, bias=False), nn.ReLU(inplace=True))
         self.image_aggregate_2 = nn.Sequential(nn.Conv2d(128 * 4, 64, kernel_size=1, bias=False), nn.ReLU(inplace=True))
