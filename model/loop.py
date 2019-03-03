@@ -53,10 +53,10 @@ class LoopModel(nn.Module):
         self.edge_pred_3 = nn.Sequential(nn.Linear(512, 64), nn.ReLU(), nn.Linear(64, 1))
         self.edge_pred_4 = nn.Sequential(nn.Linear(1024, 64), nn.ReLU(), nn.Linear(64, 1))
 
-        self.coord_encoder_1 = nn.Sequential(nn.Conv1d(128, 64), nn.ReLU(), nn.Linear(64, 1))
-        self.edge_pred_2 = nn.Sequential(nn.Linear(256, 64), nn.ReLU(), nn.Linear(64, 1))
-        self.edge_pred_3 = nn.Sequential(nn.Linear(512, 64), nn.ReLU(), nn.Linear(64, 1))
-        self.edge_pred_4 = nn.Sequential(nn.Linear(1024, 64), nn.ReLU(), nn.Linear(64, 1))
+        self.coord_encoder_1 = LoopEncoder(128)
+        self.coord_encoder_2 = LoopEncoder(256)
+        self.coord_encoder_3 = LoopEncoder(512)
+        self.coord_encoder_4 = LoopEncoder(1024)
 
         
         self.image_aggregate_1 = nn.Sequential(nn.Conv2d(64 * 4, 64, kernel_size=1, bias=False), nn.ReLU(inplace=True))
@@ -121,7 +121,7 @@ class LoopModel(nn.Module):
             pass
         return x
 
-    def aggregate_loop(image_x, coord_x, edge_pred, loop_pred， corners, corner_edge_pairs, edge_corner, num_corners):
+    def aggregate_loop(image_x, coord_x, edge_pred, loop_pred, loop_encoder, corners, corner_edge_pairs, edge_corner, num_corners):
         edge_x = torch.cat([image_x.max(-1, keepdim=True)[0].max(-2, keepdim=True)[0], coord_x], dim=1)
         edge_confidence = torch.sigmoid(edge_pred(edge_x))
         
@@ -134,18 +134,16 @@ class LoopModel(nn.Module):
         corner_features = corner_features / torch.clamp(count.view((-1, 1, 1, 1)), min=1)
 
         loop_features = []
-        loop_corners = []
+        loop_edges = []
         for confidence, loops in all_loops:
             for loop_index in range(len(loops)):
                 loop = loops[loop_index]
-                feature = torch.cat([corner_features[loop].max(0)[0], corners[loop].view(-1)], dim=-1)
-                    #print(feature.shape)
-                    if len(feature) < self.options.max_num_loop_corners:
-                        feature = torch.cat([feature, torch.zeros((self.options.max_num_loop_corners - len(feature), feature.shape[1])).cuda()], dim=0)
-                        pass
-                    loop_features.append(feature)
-                    loop_corners.append(loop)
-                    continue
+                loop_inp = torch.cat([corner_features[loop], corners[loop]], dim=-1)
+                loop_feature = loop_encoder(loop_inp)
+                loop_features.append(loop_feature)
+                loop_corner_pairs = torch.cat([torch.stack([loop, torch.cat([loop[-1:], loop[:-1]], dim=0)], dim=-1), torch.stack([loop, torch.cat([loop[1:], loop[:1]], dim=0)], dim=-1)], dim=0)
+                loop_edge = (edge_corner.unsqueeze(1) == loop_corner_pairs).min(-1)[0].max(-1)[0]
+                loop_edges.append(loop_edge)
                 continue
             loop_features = torch.stack(loop_features, dim=0).transpose(1, 2)
             loop_x = self.loop_encoder(loop_features)
