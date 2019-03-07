@@ -20,7 +20,7 @@ def parse_args():
                         default=0, type=int)
     parser.add_argument('--num_training_images', dest='num_training_images',
                         help='num training images',
-                        default=10000, type=int)
+                        default=1000, type=int)
     parser.add_argument('--num_testing_images', dest='num_testing_images',
                         help='num testing images',
                         default=-1, type=int)

@@ -14,29 +14,63 @@ def findLoopsModule(edge_confidence, edge_corner, num_corners, max_num_loop_corn
     ## Paths = [(path_confidence, path_corners)] where the ith path has a length of (i + 1), path_confidence is the summation of confidence along the path between two corners, and path_corners is visited corners along the path
     paths = [(corner_confidence, corner_range_map.unsqueeze(-1))]
     dot_product_threshold = np.cos(np.deg2rad(20))
+
     while len(paths) < max_num_loop_corners - 1:
         path_confidence, path_corners = paths[-1]
         total_confidence = path_confidence.unsqueeze(-1) + corner_confidence
         visited_mask = (path_corners.unsqueeze(-1) == corner_range).max(-2)[0]
-        if disable_colinear and path_corners.shape[-1] > 1:
-            prev_edge = corners[path_corners[:, :, -1]] - corners[path_corners[:, :, -2]]
-            prev_edge = prev_edge / torch.norm(prev_edge, dim=-1, keepdim=True)
-            current_edge = corners - corners[path_corners[:, :, -1]].unsqueeze(-2)
-            current_edge = current_edge / torch.norm(current_edge, dim=-1, keepdim=True)
+
+        if disable_colinear and path_corners.shape[-1] > 0:
+            #prev_edge = corners[path_corners[:, :, -1]] - corners[path_corners[:, :, -2]]
+            #prev_edge = corners.unsqueeze(-2) - corners[path_corners[:, :, -1]].squeeze(-3)
+            prev_edge = corners - corners[path_corners[:, :, -1]]
+            prev_edge = prev_edge / torch.clamp(torch.norm(prev_edge, dim=-1, keepdim=True), min=1e-4)
+            #current_edge = corners - corners[path_corners[:, :, -1]].unsqueeze(-2)
+            current_edge = corners.unsqueeze(-2) - corners.unsqueeze(-3)
+            current_edge = current_edge / torch.clamp(torch.norm(current_edge, dim=-1, keepdim=True), min=1e-4)
             dot_product = (prev_edge.unsqueeze(-2) * current_edge).sum(-1)
+            #print(prev_edge, current_edge)
+            #print(dot_product)
             colinear_mask = torch.abs(dot_product) > dot_product_threshold
+            #print(path_corners.shape, visited_mask.shape, colinear_mask.shape)
+            visited_mask_ori = visited_mask            
             visited_mask = visited_mask | colinear_mask
             pass
+
+        if False and disable_colinear and path_corners.shape[-1] > 0:
+            visited_mask_debug = visited_mask.float()
+            #visited_mask = torch.max(visited_mask, (prev_corner.unsqueeze(1) == corner_range.unsqueeze(-1)).float())
+            total_confidence_debug = total_confidence * (1 - visited_mask_debug) - (max_num_loop_corners) * visited_mask_debug
+            #print(path_confidence, total_confidence, visited_mask)        
+            #print(total_confidence, visited_mask)
+            _, last_corner = total_confidence_debug.max(1)
+            
+            visited_mask_debug = visited_mask_ori.float()
+            total_confidence_debug = total_confidence * (1 - visited_mask_debug) - (max_num_loop_corners) * visited_mask_debug
+            _, last_corner_ori = total_confidence_debug.max(1)
+        
+            mask = last_corner != last_corner_ori
+            #mask, index = mask.max(-1)
+            if mask.sum() > 0:
+                #print(path_corners[mask])                                
+                #print(dot_product[mask])                
+                print('colinear', torch.cat([path_corners[mask][:, -2:], last_corner_ori[mask].view((-1, 1)), last_corner[mask].view((-1, 1))], dim=1))
+                pass
+            pass
+        
         visited_mask = visited_mask.float()
         #visited_mask = torch.max(visited_mask, (prev_corner.unsqueeze(1) == corner_range.unsqueeze(-1)).float())
         total_confidence = total_confidence * (1 - visited_mask) - (max_num_loop_corners) * visited_mask
         #print(path_confidence, total_confidence, visited_mask)        
         #print(total_confidence, visited_mask)
         new_path_confidence, last_corner = total_confidence.max(1)
+        
+        
         existing_path = path_corners[corner_range_map.view(-1), last_corner.view(-1)].view((num_corners, num_corners, -1))
         new_path_corners = torch.cat([existing_path, last_corner.unsqueeze(-1)], dim=-1)
         paths.append((new_path_confidence, new_path_corners))
         continue
+    
     #print(paths)
     ## Find closed loops by adding the starting point to the path
     paths = paths[1:]

@@ -57,10 +57,10 @@ class LoopModel(nn.Module):
         self.edge_pred_3 = nn.Sequential(nn.Linear(512, 64), nn.ReLU(), nn.Linear(64, 1))
         self.edge_pred_4 = nn.Sequential(nn.Linear(1024, 64), nn.ReLU(), nn.Linear(64, 1))
 
-        self.loop_pred_1 = LoopEncoder(128 + 2)
-        self.loop_pred_2 = LoopEncoder(256 + 2)
-        self.loop_pred_3 = LoopEncoder(512 + 2)
-        self.loop_pred_4 = LoopEncoder(1024 + 2)
+        self.loop_pred_1 = LoopEncoder(128 + 3)
+        self.loop_pred_2 = LoopEncoder(256 + 3)
+        self.loop_pred_3 = LoopEncoder(512 + 3)
+        self.loop_pred_4 = LoopEncoder(1024 + 3)
 
         
         self.image_aggregate_1 = nn.Sequential(nn.Conv2d(64 + 64, 64, kernel_size=1, bias=False), nn.ReLU(inplace=True))
@@ -107,7 +107,6 @@ class LoopModel(nn.Module):
     def aggregate_loop(self, image_x, coord_x, edge_pred, loop_pred, image_aggregate, coord_aggregate, corners, corner_edge_pairs, edge_corner, num_corners):
         edge_x = torch.cat([image_x.max(-1, keepdim=True)[0].max(-2, keepdim=True)[0], coord_x], dim=1).squeeze(-1).squeeze(-1)
         edge_confidence = torch.sigmoid(edge_pred(edge_x)).view(-1)
-
         
         all_loops = findLoopsModule(edge_confidence, edge_corner, num_corners, self.options.max_num_loop_corners, corners=corners, disable_colinear=True)
 
@@ -126,13 +125,35 @@ class LoopModel(nn.Module):
                 if confidence[loop_index] < min(0.5, max_confidence):
                     continue
                 loop = loops[loop_index]
-                loop_inp = torch.cat([corner_features[loop], corners[loop]], dim=-1).transpose(0, 1).unsqueeze(0)
+                #loop_corner_pairs = torch.cat([torch.stack([loop, torch.cat([loop[-1:], loop[:-1]], dim=0)], dim=-1), torch.stack([loop, torch.cat([loop[1:], loop[:1]], dim=0)], dim=-1)], dim=0)
+                loop_corner_pairs = torch.cat([torch.stack([loop, torch.cat([loop[-1:], loop[:-1]], dim=0)], dim=-1), torch.stack([torch.cat([loop[-1:], loop[:-1]], dim=0), loop], dim=-1)], dim=0)
+                loop_edge_mask = (edge_corner.unsqueeze(1) == loop_corner_pairs).min(-1)[0]
+                loop_edges.append(loop_edge_mask.max(-1)[0].float())
+
+                # print(loop)
+                # print(edge_corner)
+                # print(loop_corner_pairs)
+                # print(loop_edge_mask)
+                loop_edge_mask = torch.max(loop_edge_mask[:, :loop_edge_mask.shape[-1] // 2], loop_edge_mask[:, loop_edge_mask.shape[-1] // 2:])
+                loop_edge = loop_edge_mask.max(0)[1]                
+                #loop_edge = loop_edge.nonzero().view(-1)
+                #loop_inp = torch.cat([corner_features[loop], corners[loop], edge_x[loop_edge], edge_confidence[loop_edge].view((-1, 1))], dim=-1).transpose(0, 1).unsqueeze(0)
+                #edge_x = torch.cat([image_x.max(-1, keepdim=True)[0].max(-2, keepdim=True)[0], coord_x], dim=1).squeeze(-1).squeeze(-1)
+
+                ## Find loop corners along the loop
+                # loop_corners = corners[edge_corner[loop_edge]]
+                # if torch.norm(loop_corners[0, 0] - loop_corners[-1], dim=-1).min() > torch.norm(loop_corners[0, 1] - loop_corners[-1], dim=-1).min():
+                #     loop_corners = torch.cat([torch.cat([loop_corners[:1, 1:2], loop_corners[:1, 0:1]], dim=1), loop_corners[1:]], dim=0)
+                #     pass
+                # loop_corners_prev = torch.cat([loop_corners[-1:], loop_corners[:-1]], dim=0)
+                # distances = torch.stack([torch.norm(loop_corners[:, 0] - loop_corners_prev[:, 1], dim=-1), torch.norm(loop_corners[:, 1] - loop_corners_prev[:, 1], dim=-1)], dim=-1)
+                # corner_indices = torch.cat([torch.zeros(1).long().cuda(), distances.min(-1)[1][1:]], dim=0)
+                # corner_indices = torch.cumsum(corner_indices, dim=0) % 2
+                # loop_corners = loop_corners[torch.arange(len(distances)).cuda().long(), corner_indices]
+                loop_inp = torch.cat([edge_x[loop_edge], corners[loop], edge_confidence[loop_edge].view((-1, 1))], dim=-1).transpose(0, 1).unsqueeze(0)
                 loop_feature, loop_confidence = loop_pred(loop_inp)
                 loop_features.append(loop_feature.squeeze(0))
                 loop_confidences.append(loop_confidence)
-                loop_corner_pairs = torch.cat([torch.stack([loop, torch.cat([loop[-1:], loop[:-1]], dim=0)], dim=-1), torch.stack([loop, torch.cat([loop[1:], loop[:1]], dim=0)], dim=-1)], dim=0)
-                loop_edge = (edge_corner.unsqueeze(1) == loop_corner_pairs).min(-1)[0].max(-1)[0].float()
-                loop_edges.append(loop_edge)
                 continue
             continue
         loop_features = torch.stack(loop_features, dim=0)

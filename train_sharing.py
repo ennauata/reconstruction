@@ -137,7 +137,7 @@ def main(options):
         #     if isinstance(m, nn.BatchNorm2d):
         #         m.eval()
 
-        for epoch in range(10):
+        for epoch in range(100):
             #os.system('rm ' + options.test_dir + '/' + str(num_edges) + '_*')
             dset_train.reset()
             train_loader = DataLoader(dset_train, batch_size=1, shuffle=True, num_workers=1)    
@@ -169,7 +169,7 @@ def main(options):
 
                     loop_pred = result[1]
                     loop_edge = result[2]
-                    loop_gt = ((loop_edge * edge_gt).sum(-1) == loop_edge_mask.sum(-1)).float()
+                    loop_gt = ((loop_edge * edge_gt).sum(-1) == loop_edge.sum(-1)).float()
                     losses.append(F.binary_cross_entropy(loop_pred, loop_gt))
                     loop_preds.append(loop_pred)
                     loop_gts.append(loop_gt)
@@ -200,21 +200,22 @@ def main(options):
                     #building.update_edges(edge_pred.detach().cpu().numpy() > 0.5)
                     for pred_index, edge_pred in enumerate(edge_preds):
                         images, _ = building.visualize(mode='', edge_state=edge_pred.detach().cpu().numpy() > 0.5)
-                        cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_image_' + str(pred_index) + '.png', images[0])
+                        cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_edge_' + str(pred_index) + '_pred.png', images[0])
                         continue
                     #building.update_edges(edge_confidence.detach().cpu().numpy() > 0.5)
                     images, _ = building.visualize(mode='', edge_state=edge_gt.detach().cpu().numpy() > 0.5)
-                    cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_input.png', images[0])
+                    cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_edge_gt.png', images[0])
 
-                    for pred_index, (loop_pred, loop_gt, loop_edge_mask) in enumerate(loop_preds, loop_gts, loop_edges):
-                        edge_mask = loop_edge_mask * loop_pred.view((-1, 1)).max(0)[0]
+                    for pred_index, (loop_pred, loop_gt, loop_edge_mask) in enumerate(zip(loop_preds, loop_gts, loop_edges)):
+                        edge_mask = (loop_edge_mask * loop_pred.view((-1, 1))).max(0)[0]
                         images, _ = building.visualize(mode='', edge_state=edge_mask.detach().cpu().numpy() > 0.5)
                         cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_loop_' + str(pred_index) + '_pred.png', images[0])
-                        edge_mask = loop_edge_mask * loop_gt.view((-1, 1)).max(0)[0]
-                        images, _ = building.visualize(mode='', edge_state=edge_mask.detach().cpu().numpy() > 0.5)
-                        cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_loop_' + str(pred_index) + '_gt.png', images[0])
+                        if (pred_index == len(loop_preds) - 1) or True:
+                            edge_mask = (loop_edge_mask * loop_gt.view((-1, 1))).max(0)[0]
+                            images, _ = building.visualize(mode='', edge_state=edge_mask.detach().cpu().numpy() > 0.5)
+                            cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_loop_' + str(pred_index) + '_gt.png', images[0])
+                            pass
                         continue
-                    
                     # loop_corners = [loop.detach().cpu().numpy() for loop in loop_corners]
                     # image = building.visualizeLoops(loop_corners, loop_pred.detach().cpu().numpy() > 0.5)
                     # cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_loop_pred.png', image)
