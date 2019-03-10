@@ -956,6 +956,12 @@ class Building():
         image = self.rgb.copy()        
         corner_image, corner_masks = self.compute_corner_image(self.corners_det)
         image[corner_image > 0.5] = np.array([255, 0, 0], dtype=np.uint8)
+        if debug:
+            for corner_index, corner in enumerate(self.corners_det):
+                cv2.putText(image, str(corner_index), (corner[1], corner[0]), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.5, color=(0, 0, 255))
+                continue
+            pass
+        
         edge_image = image.copy()
         if 'last' in mode:
             edge_mask = draw_edges(self.predicted_edges[-1], self.edges_det)
@@ -967,7 +973,7 @@ class Building():
                 pass
             edge_mask = draw_edges(edge_state, self.edges_det)
             pass
-        edge_image[edge_mask > 0.5] = np.array([255, 0, 255], dtype=np.uint8)
+        edge_image[edge_mask > 0.5] = np.array(color, dtype=np.uint8)
         images = [edge_image]
         if 'mistake' in mode:
             if (self.predicted_edges[-1] - self.edges_gt).max() > 0:
@@ -975,7 +981,7 @@ class Building():
                     if (edges - self.edges_gt).max() > 0:
                         edge_image = image.copy()
                         edge_mask = draw_edges(edges, self.edges_det)
-                        edge_image[edge_mask > 0.5] = np.array([255, 0, 255], dtype=np.uint8)
+                        edge_image[edge_mask > 0.5] = np.array(color, dtype=np.uint8)
                         images.append(edge_image)
                         break
                     continue
@@ -1704,3 +1710,40 @@ class Building():
         loop_acc = np.stack(loop_acc)
 
         return loop_corners, np.array(loop_labels), edges_loops, loop_acc
+
+    def add_colinear_gt(self):
+        dot_product_threshold = np.cos(np.deg2rad(20))        
+        directions = (self.edges_det[:, 2:4] - self.edges_det[:, :2]).astype(np.float32)
+        directions = directions / np.maximum(np.linalg.norm(directions, axis=-1, keepdims=True), 1e-4)
+        while True:
+            has_change = False
+            for edge_index_1, edge_gt_1 in enumerate(self.edges_gt):
+                if edge_gt_1 < 0.5:
+                    continue
+                for edge_index_2, edge_gt_2 in enumerate(self.edges_gt):
+                    if edge_index_2 <= edge_index_1 or edge_gt_2 < 0.5:
+                        continue
+                    if (np.expand_dims(self.edge_corner[edge_index_2], axis=-1) == self.edge_corner[edge_index_1]).max() < 0.5:
+                        continue
+                    corner_count = np.zeros(len(self.edges_gt))
+                    np.add.at(corner_count, self.edge_corner[edge_index_1], 1)
+                    np.add.at(corner_count, self.edge_corner[edge_index_2], 1)
+                    corner_pair = (corner_count == 1).nonzero()[0]
+                    edge_index_mask = (self.edge_corner == corner_pair).all(-1) | (self.edge_corner == np.stack([corner_pair[1], corner_pair[0]], axis=0)).all(-1)
+                    other_edge_index = edge_index_mask.nonzero()[0]
+                    if len(other_edge_index) == 0:
+                        continue
+                    other_edge_index = other_edge_index[0]
+                    if self.edges_gt[other_edge_index] > 0.5:
+                        continue
+                    if np.abs(np.dot(directions[edge_index_1], directions[edge_index_2])) > dot_product_threshold:
+                        self.edges_gt[other_edge_index] = 1
+                        #print(self.edge_corner[edge_index_1], self.edge_corner[edge_index_2])
+                        has_change = True
+                        pass
+                    continue
+                continue
+            if not has_change:
+                break
+            continue
+        return

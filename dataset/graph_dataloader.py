@@ -29,6 +29,7 @@ class GraphData(Dataset):
             pass                
         self.buildings = []
         for _id in id_list:
+            #_id = '1548722484.99'
             corner_types = []
             corner_type = options.corner_type if split == 'train' else options.testing_corner_type
             if 'annots_dets' in corner_type:

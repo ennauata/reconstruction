@@ -438,7 +438,7 @@ class ResNetLoop(nn.Module):
         num_corners = len(corners)        
         edge_pred = self.edge_pred(x, corner_edge_pair, edge_corner, num_corners, aggregate='sharing' in self.options.suffix)
 
-        all_loops = findLoopsModule(edge_pred, edge_corner, num_corners, self.options.max_num_loop_corners)
+        all_loops = findLoopsModule(edge_pred, edge_corner, num_corners, self.options.max_num_loop_corners, corners=corners, disable_colinear=True)
 
         loop_features = []
         loop_corners = []
@@ -645,7 +645,7 @@ class GraphModelCustom(nn.Module):
         edge_pred = torch.sigmoid(self.edge_pred(x), ).view(-1)
         
         if 'loop' in self.options.suffix:
-            all_loops = findLoopsModule(edge_pred, edge_corner, num_corners, self.options.max_num_loop_corners)
+            all_loops = findLoopsModule(edge_pred, edge_corner, num_corners, self.options.max_num_loop_corners, corners=corners, disable_colinear=True)
 
             loop_features = []
             loop_corners = []
