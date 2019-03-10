@@ -1,6 +1,8 @@
 import torch
 
-def findLoopsModule(edge_confidence, edge_corner, num_corners, max_num_loop_corners=10, confidence_threshold=0):
+# def findLoopsModule(edge_confidence, edge_corner, num_corners, max_num_loop_corners=10, confidence_threshold=0):
+
+def findLoopsModule(edge_confidence, edge_corner, num_corners, max_num_loop_corners=10, confidence_threshold=0, corners=None, disable_colinear=True):
     ## The confidence of connecting two corners
     corner_confidence = torch.zeros(num_corners, num_corners).cuda()
     corner_confidence[edge_corner[:, 0], edge_corner[:, 1]] = edge_confidence
@@ -12,11 +14,21 @@ def findLoopsModule(edge_confidence, edge_corner, num_corners, max_num_loop_corn
 
     ## Paths = [(path_confidence, path_corners)] where the ith path has a length of (i + 1), path_confidence is the summation of confidence along the path between two corners, and path_corners is visited corners along the path
     paths = [(corner_confidence, corner_range_map.unsqueeze(-1))]
+    dot_product_threshold = np.cos(np.deg2rad(20))
     while len(paths) < max_num_loop_corners - 1:
         path_confidence, path_corners = paths[-1]
         total_confidence = path_confidence.unsqueeze(-1) + corner_confidence
-        prev_corner = path_corners[:, :, -1]
-        visited_mask = (path_corners.unsqueeze(-1) == corner_range).max(-2)[0].float()
+        visited_mask = (path_corners.unsqueeze(-1) == corner_range).max(-2)[0]
+        if disable_colinear and path_corners.shape[-1] > 1:
+            prev_edge = corners[path_corners[:, :, -1]] - corners[path_corners[:, :, -2]]
+            prev_edge = prev_edge / torch.norm(prev_edge, dim=-1, keepdim=True)
+            current_edge = corners - corners[path_corners[:, :, -1]].unsqueeze(-2)
+            current_edge = current_edge / torch.norm(current_edge, dim=-1, keepdim=True)
+            dot_product = (prev_edge.unsqueeze(-2) * current_edge).sum(-1)
+            colinear_mask = torch.abs(dot_product) > dot_product_threshold
+            visited_mask = visited_mask | colinear_mask
+            pass
+        visited_mask = visited_mask.float()
         #visited_mask = torch.max(visited_mask, (prev_corner.unsqueeze(1) == corner_range.unsqueeze(-1)).float())
         total_confidence = total_confidence * (1 - visited_mask) - (max_num_loop_corners) * visited_mask
         #print(path_confidence, total_confidence, visited_mask)        
@@ -45,7 +57,7 @@ def findLoopsModule(edge_confidence, edge_corner, num_corners, max_num_loop_corn
             loop_confidence, index = loop_confidence.max(0, keepdim=True)
             index = index.squeeze().item()
             loops.append((loop_confidence, loop[index:index + 1]))
-            pass
+            continue
         loop_confidence = loop_confidence[mask]
         loop = loop[mask]
         if len(loop) > 0:
@@ -59,20 +71,6 @@ def findLoopsModule(edge_confidence, edge_corner, num_corners, max_num_loop_corn
             pass
         continue
     return loops
-
-    # #paths = [(path[0], torch.cat([path[1], corner_range_map.transpose(0, 1).unsqueeze(-1)], dim=-1)) for path in paths]
-    # loops = []
-    # print(paths)
-    # for path in paths:
-    #     confidence = path[0].diagonal()
-    #     path = path[1].diagonal().transpose(0, 1)
-    #     mask = confidence > 0
-    #     loops.append((confidence[mask], path[mask]))
-    #     continue
-    # print(loops)
-    # exit(1)
-    # return loops
-
 
 ## The pyramid module from pyramid scene parsing
 class PyramidModule(torch.nn.Module):

@@ -85,12 +85,12 @@ class Metrics():
                 draw.polygon(loop_coords, fill='white')
                 iou = np.logical_and(gt_loop_im, pred_loop_im).sum()/np.logical_or(gt_loop_im, pred_loop_im).sum()
 
-                print(iou)
-                plt.figure()
-                plt.imshow(pred_loop_im)
-                plt.figure()
-                plt.imshow(gt_loop_im)
-                plt.show()
+                # print(iou)
+                # plt.figure()
+                # plt.imshow(pred_loop_im)
+                # plt.figure()
+                # plt.imshow(gt_loop_im)
+                # plt.show()
 
                 # hit (>= thresh) and not found yet
                 if iou >= near_gt[1]:   
