@@ -6,9 +6,9 @@ import numpy as np
 from model.modules import findLoopsModule
 from model.resnet import BasicBlock, conv1x1
 
-class LoopEncoder(nn.Module):
+class LoopEncoderSparse(nn.Module):
     def __init__(self, num_input_channels):
-        super(LoopEncoder, self).__init__()
+        super(LoopEncoderSparse, self).__init__()
         kernel_size = 3
         self.padding = nn.ReflectionPad1d((kernel_size - 1) // 2)
         self.conv_0 = nn.Sequential(self.padding, nn.Conv1d(num_input_channels, 64, kernel_size=kernel_size), nn.ReLU(inplace=True))
@@ -24,6 +24,66 @@ class LoopEncoder(nn.Module):
         x = x.max(-1)[0]
         pred = torch.sigmoid(self.loop_pred(x))
         return x, pred
+
+class LoopEncoderDense(nn.Module):
+    def __init__(self, num_input_channels):
+        super(LoopEncoderDense, self).__init__()
+        kernel_size = 5
+        self.padding = nn.ReflectionPad1d((kernel_size - 1) // 2)
+        self.conv_0 = nn.Sequential(self.padding, nn.Conv1d(num_input_channels, 64, kernel_size=kernel_size), nn.ReLU(inplace=True),
+                                    self.padding, nn.Conv1d(64, 64, kernel_size=kernel_size, stride=2), nn.ReLU(inplace=True))
+        self.conv_1 = nn.Sequential(self.padding, nn.Conv1d(64, 64, kernel_size=kernel_size), nn.ReLU(inplace=True),
+                                    self.padding, nn.Conv1d(64, 64, kernel_size=kernel_size, stride=2), nn.ReLU(inplace=True))
+
+        kernel_size = 3
+        self.padding_small = nn.ReflectionPad1d((kernel_size - 1) // 2)                
+        self.conv_2 = nn.Sequential(self.padding_small, nn.Conv1d(64, 64, kernel_size=kernel_size), nn.ReLU(inplace=True),
+                                    self.padding_small, nn.Conv1d(64, 64, kernel_size=kernel_size, stride=2), nn.ReLU(inplace=True))
+        self.loop_feature = nn.Sequential(nn.Linear(64, 64), nn.ReLU())
+        self.loop_pred = nn.Linear(64, 1)
+        self.density = 20.0
+        return
+    
+    def forward(self, image_x, corners):
+        edges = torch.cat([corners, torch.cat([corners[1:], corners[:1]], dim=0)], dim=-1)        
+        lengths = torch.norm(edges[:, :2] - edges[:, 2:4], dim=-1)
+        length_sum = lengths.sum()
+        density = max(self.density, 1.0 / lengths[lengths > 1e-4].min())
+        num_points = ((length_sum * density).long() // 8 + 1) * 8
+        offsets = torch.arange(num_points).float().cuda() * (length_sum / num_points)
+        edge_lengths_2 = torch.cumsum(lengths, dim=0)
+        edge_lengths_1 = torch.cat([torch.zeros(1).cuda(), edge_lengths_2[:-1]], dim=0)
+        edge_offsets = (offsets.unsqueeze(-1) - edge_lengths_1) / torch.clamp(lengths, min=1e-4)
+        points = edges[:, :2] + edge_offsets.unsqueeze(-1) * (edges[:, 2:4] - edges[:, :2])
+        mask = ((offsets.unsqueeze(-1) >= edge_lengths_1) & (offsets.unsqueeze(-1) < edge_lengths_2)).float()
+        points = (points * mask.unsqueeze(-1)).sum(1)
+        points_round = torch.clamp(torch.round(points * image_x.shape[1]).long(), 0, image_x.shape[1] - 1)
+        x = image_x[:, points_round[:, 0], points_round[:, 1]].clone()
+
+        x = torch.cat([x, points.transpose(0, 1)], dim=0).unsqueeze(0)
+        x = self.conv_0(x)
+        x = self.conv_1(x)
+        x = self.conv_2(x)
+              
+        if False:
+            points = points_round.detach().cpu().numpy()
+            #image = np.zeros((64, 64, 3), dtype=np.uint8)
+            #image = cv2.imread('test/image.png')
+            image = image_x.detach().cpu().numpy().mean(0)
+            image = (image / image.max() * 255).astype(np.uint8)
+            image = np.stack([image, image, image], axis=-1)
+            #image[points[:, 0], points[:, 1]] = np.array([255, 0, 0])
+            corners = np.clip((corners.detach().cpu().numpy() * 64).round().astype(np.int32), 0, 255)
+            for corner in corners:
+                cv2.circle(image, (corner[1], corner[0]), radius=2, thickness=-1, color=(0, 0, 255))
+                continue
+            cv2.imwrite('test/mask.png', cv2.resize(image, (256, 256)))
+            exit(1)
+            pass
+        x = x.max(-1)[0]
+        x = self.loop_feature(x)
+        pred = torch.sigmoid(self.loop_pred(x))
+        return x, pred    
         
 class LoopModel(nn.Module):
     def __init__(self, options, num_classes=1):
@@ -57,10 +117,10 @@ class LoopModel(nn.Module):
         self.edge_pred_3 = nn.Sequential(nn.Linear(512, 64), nn.ReLU(), nn.Linear(64, 1))
         self.edge_pred_4 = nn.Sequential(nn.Linear(1024, 64), nn.ReLU(), nn.Linear(64, 1))
 
-        self.loop_pred_1 = LoopEncoder(128 + 3)
-        self.loop_pred_2 = LoopEncoder(256 + 3)
-        self.loop_pred_3 = LoopEncoder(512 + 3)
-        self.loop_pred_4 = LoopEncoder(1024 + 3)
+        self.loop_pred_1 = LoopEncoderDense(64 + 2)
+        self.loop_pred_2 = LoopEncoderDense(128 + 2)
+        self.loop_pred_3 = LoopEncoderDense(256 + 2)
+        self.loop_pred_4 = LoopEncoderDense(512 + 2)
 
         
         self.image_aggregate_1 = nn.Sequential(nn.Conv2d(64 + 64, 64, kernel_size=1, bias=False), nn.ReLU(inplace=True))
@@ -150,8 +210,12 @@ class LoopModel(nn.Module):
                 # corner_indices = torch.cat([torch.zeros(1).long().cuda(), distances.min(-1)[1][1:]], dim=0)
                 # corner_indices = torch.cumsum(corner_indices, dim=0) % 2
                 # loop_corners = loop_corners[torch.arange(len(distances)).cuda().long(), corner_indices]
-                loop_inp = torch.cat([edge_x[loop_edge], corners[loop], edge_confidence[loop_edge].view((-1, 1))], dim=-1).transpose(0, 1).unsqueeze(0)
-                loop_feature, loop_confidence = loop_pred(loop_inp)
+                
+                #loop_inp = torch.cat([edge_x[loop_edge], corners[loop], edge_confidence[loop_edge].view((-1, 1))], dim=-1).transpose(0, 1).unsqueeze(0)
+                #print(corners[loop])
+                #print(corners[edge_corner[loop_edge]])
+                
+                loop_feature, loop_confidence = loop_pred(image_x[loop_edge].max(0)[0], corners[loop])
                 loop_features.append(loop_feature.squeeze(0))
                 loop_confidences.append(loop_confidence)
                 continue
@@ -175,6 +239,7 @@ class LoopModel(nn.Module):
         return image_x, coord_x, [edge_confidence, loop_confidences, loop_edges]
     
     def forward(self, image, corners, edges, corner_edge_pairs, edge_corner):
+        #cv2.imwrite('test/image.png', (image[0, :3].detach().cpu().numpy() * 255).astype(np.uint8).transpose((1, 2, 0)))
         num_corners = len(corners)
         intermediate_results = []
 

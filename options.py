@@ -5,7 +5,7 @@ def parse_args():
 
     parser.add_argument('--data_path', dest='data_path',
                         help='path to data',
-                        default='.', type=str)
+                        default='building_reconstruction/dataset_atlanta/', type=str)
     parser.add_argument('--corner_type', dest='corner_type',
                         help='corner type for the search algorithm',
                         default='annots_only', type=str)
@@ -44,6 +44,6 @@ def parse_args():
                         default='', type=str)
     parser.add_argument('--max_num_loop_corners', dest='max_num_loop_corners',
                         help='maximum number of loop corners',
-                        default=10, type=int)
+                        default=12, type=int)
 
     return parser.parse_args()
