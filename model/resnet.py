@@ -131,7 +131,7 @@ class ResNet(nn.Module):
     def __init__(self, block, layers, num_classes=1000):
         super(ResNet, self).__init__()
         self.inplanes = 64
-        self.conv1 = nn.Conv2d(6, 64, kernel_size=7, stride=2, padding=3,
+        self.conv1 = nn.Conv2d(129, 64, kernel_size=7, stride=2, padding=3,
                                bias=False)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
@@ -249,7 +249,7 @@ def CustomResNet(pretrained=False, **kwargs):
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = ResNet(BasicBlock, [3, 4, 6, 3], **kwargs)
+    model = ResNet(BasicBlock, [3, 4, 6, 3], **kwargs, num_classes=1)
     if pretrained:
         state_dict = model_zoo.load_url(model_urls['resnet34'])
         state = model.state_dict()
@@ -291,7 +291,8 @@ class ResNetBatch(nn.Module):
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
             
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(512 * block.expansion, num_classes)
+        self.fc1 = nn.Linear(512 * block.expansion, 128)
+        self.fc2 = nn.Linear(128, num_classes)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -374,10 +375,12 @@ class ResNetBatch(nn.Module):
 
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
-        x = self.fc(x)
+        y = self.fc1(x)
+        z = self.relu(y)
+        z = self.fc2(z)
 
-        pred = torch.sigmoid(x).view(-1)
-        return pred
+        pred = torch.sigmoid(z).view(-1)
+        return pred, y
 
 class ResNetLoop(nn.Module):
     def __init__(self, options):
@@ -488,7 +491,7 @@ def create_model(options):
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = ResNetBatch(options, BasicBlock, [3, 4, 6, 3], num_classes=1)
+    model = CustomResNet(pretrained=True)
     if options.restore == 0:
         state_dict = model_zoo.load_url(model_urls['resnet34'])
         state = model.state_dict()
@@ -665,5 +668,6 @@ class GraphModelCustom(nn.Module):
         else:
             loop_pred = None
             loop_corners = []
+            loop_features = []
             pass
         return edge_pred, loop_pred, loop_corners, loop_features

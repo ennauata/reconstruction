@@ -2,7 +2,9 @@ import argparse
 
 def parse_args():
     parser = argparse.ArgumentParser(description='PlaneFlow')
-
+    parser.add_argument('--predicted_edges_path', dest='predicted_edges_path',
+                        help='path to predicted edges',
+                        default='.', type=str)
     parser.add_argument('--data_path', dest='data_path',
                         help='path to data',
                         default='.', type=str)
@@ -20,7 +22,7 @@ def parse_args():
                         default=0, type=int)
     parser.add_argument('--num_training_images', dest='num_training_images',
                         help='num training images',
-                        default=10000, type=int)
+                        default=1000, type=int)
     parser.add_argument('--num_testing_images', dest='num_testing_images',
                         help='num testing images',
                         default=-1, type=int)
@@ -29,7 +31,7 @@ def parse_args():
                         default=1, type=int)
     parser.add_argument('--LR', dest='LR',
                         help='learning rate',
-                        default=1e-3, type=float)
+                        default=1e-4, type=float)
     parser.add_argument('--task', dest='task',
                         help='task',
                         default='train', type=str)
