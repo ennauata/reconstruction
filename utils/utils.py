@@ -1,5 +1,46 @@
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
+import matplotlib.pyplot as plt 
+
+def loop_nms(loops_conf, loop_edges, loop_corners, conf_thresh=.5, nms_thresh =.8):
+
+    inds = np.argsort(loops_conf)[::-1]
+    loops_conf_sorted = np.array(loops_conf[inds])
+    loop_corners_sorted = [loop_corners[i] for i in inds]  
+    loop_edges_sorted = np.array([loop_edges[i] for i in inds])
+
+    # get loop 
+    ious = loops_iou(loop_corners_sorted)
+
+    # apply nms
+    keep_track = np.zeros(loops_conf_sorted.shape[0])
+    nms_inds = []
+    for i in range(loops_conf_sorted.shape[0]):
+        if (keep_track[i] == 0) and (loops_conf_sorted[i] > conf_thresh):
+            nms_inds.append(i)
+            for j in range(loops_conf_sorted.shape[0]):
+                if ious[i, j] > nms_thresh:
+                    keep_track[j] = 1
+
+    return loop_edges_sorted[nms_inds], loops_conf_sorted[nms_inds]
+
+def loops_iou(loop_corners):
+
+    # generate polygon images
+    loop_imgs = []
+    for loop in loop_corners:
+        poly = [(x, y) for (y, x) in loop]
+        l_im = Image.new('L', (256, 256))
+        draw = ImageDraw.Draw(l_im)
+        draw.polygon(poly, fill='white')
+        loop_imgs.append(l_im)
+
+    # compute ious
+    ious = np.zeros((len(loop_imgs), len(loop_imgs)))
+    for i, l1 in enumerate(loop_imgs):
+        for j, l2 in enumerate(loop_imgs):
+            ious[i, j] = np.logical_and(l1, l2).sum()/np.logical_or(l1, l2).sum()
+    return ious
 
 def compose_im(im_arr, alpha, fill=None, shape=256):
 

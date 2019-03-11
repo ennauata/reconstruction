@@ -4,7 +4,8 @@ import cv2
 
 dot_product_threshold = np.cos(np.deg2rad(20))
 
-def findLoopsModule(edge_confidence, edge_corner, num_corners, max_num_loop_corners=12, confidence_threshold=0.5, corners=None, disable_colinear=True, disable_intersection=True):
+def findLoopsModule(edge_confidence, edge_corner, num_corners, max_num_loop_corners=12, confidence_threshold=0.7, corners=None, disable_colinear=True, disable_intersection=True):
+
     ## The confidence of connecting two corners
     corner_confidence = torch.zeros(num_corners, num_corners).cuda()
     corner_confidence[edge_corner[:, 0], edge_corner[:, 1]] = edge_confidence
@@ -16,6 +17,7 @@ def findLoopsModule(edge_confidence, edge_corner, num_corners, max_num_loop_corn
 
     ## Paths = [(path_confidence, path_corners)] where the ith path has a length of (i + 1), path_confidence is the summation of confidence along the path between two corners, and path_corners is visited corners along the path
     paths = [(corner_confidence, corner_range_map.unsqueeze(-1))]
+
 
     while len(paths) < max_num_loop_corners - 1:
         path_confidence, path_corners = paths[-1]

@@ -131,7 +131,7 @@ class ResNet(nn.Module):
     def __init__(self, block, layers, num_classes=1000):
         super(ResNet, self).__init__()
         self.inplanes = 64
-        self.conv1 = nn.Conv2d(129, 64, kernel_size=7, stride=2, padding=3,
+        self.conv1 = nn.Conv2d(6, 64, kernel_size=7, stride=2, padding=3,
                                bias=False)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
@@ -249,7 +249,7 @@ def CustomResNet(pretrained=False, **kwargs):
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = ResNet(BasicBlock, [3, 4, 6, 3], **kwargs, num_classes=1)
+    model = ResNet(BasicBlock, [3, 4, 6, 3], **kwargs)
     if pretrained:
         state_dict = model_zoo.load_url(model_urls['resnet34'])
         state = model.state_dict()
@@ -272,7 +272,7 @@ def CustomResNet(pretrained=False, **kwargs):
     return model
 
 class ResNetBatch(nn.Module):
-    def __init__(self, options, block, layers, num_classes=1):
+    def __init__(self, options, block, layers, num_classes=1, coord_emb_size=0):
         super(ResNetBatch, self).__init__()
         self.options = options
         self.inplanes = 64
@@ -280,7 +280,7 @@ class ResNetBatch(nn.Module):
         self.relu = nn.ReLU(inplace=True)            
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
-        self.conv1 = nn.Conv2d(5, 64, kernel_size=7, stride=2, padding=3,
+        self.conv1 = nn.Conv2d(4, 64, kernel_size=7, stride=2, padding=3,
                                bias=False)
         self.bn1 = nn.BatchNorm2d(64)
             
@@ -291,8 +291,8 @@ class ResNetBatch(nn.Module):
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
             
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc1 = nn.Linear(512 * block.expansion, 128)
-        self.fc2 = nn.Linear(128, num_classes)
+        self.fc = nn.Linear(512 * block.expansion + coord_emb_size, num_classes)
+        self.fc_agg = nn.Linear(2, coord_emb_size)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -325,62 +325,36 @@ class ResNetBatch(nn.Module):
 
         return nn.Sequential(*layers)
 
-    def aggregate(self, x, corner_edge_pairs, edge_corner, num_corners):
-        # #left_x = torch.zeros(x.shape).cuda()
-        # #left_x.index_add_(0, left_edges[:, 0], x[left_edges[:, 1]])
-        # count = torch.zeros(len(x)).cuda()
-        # count.index_add_(0, left_edges[:, 0], torch.ones(len(left_edges)).cuda())
-        # #x.index_add_(0, left_edges[:, 0], x[left_edges[:, 1]] / torch.clamp(count[left_edges[:, 0]], min=1).view((-1, 1, 1, 1)))
-        # x = x + torch.stack([x[left_edges[left_edges[:, 0] == edge_index, 1]].mean(0) for edge_index in range(len(x))], dim=0)
-        # #count = torch.zeros(len(x)).cuda()
-        # #count.index_add_(0, right_edges[:, 0], torch.ones(len(right_edges)).cuda())
-        # #x.index_add_(0, right_edges[:, 0], x[right_edges[:, 1]] / torch.clamp(count[right_edges[:, 0]], min=1).view((-1, 1, 1, 1)))
-        # x = x + torch.stack([x[right_edges[right_edges[:, 0] == edge_index, 1]].mean(0) for edge_index in range(len(x))], dim=0)
-        # #x = x + x.mean(0, keepdim=True)
+    def aggregate(self, ls):
 
-        #print(x.shape, corner_edge_pairs.shape, corner_edge_pairs.min(0)[0], corner_edge_pairs.max(0)[0], num_corners)
-        corner_features = torch.zeros((num_corners, x.shape[1], x.shape[2], x.shape[3])).cuda()
-        corner_features.index_add_(0, corner_edge_pairs[:, 0], x[corner_edge_pairs[:, 1]])
-        count = torch.zeros(num_corners).cuda()
-        count.index_add_(0, corner_edge_pairs[:, 0], torch.ones(len(corner_edge_pairs)).cuda())
-        corner_features = corner_features / torch.clamp(count.view((-1, 1, 1, 1)), min=1)
-        left_x = corner_features[edge_corner[:, 0]]
-        right_x = corner_features[edge_corner[:, 1]]            
-        #global_x = x.mean(0, keepdim=True).repeat(len(x), 1)
-        global_x = x.mean(0, keepdim=True)
-        x = x + left_x + right_x + global_x        
-        return x
+        feats = [] 
+        for l in ls:
+            zs = self.fc_agg(l)
+            zs = self.relu(zs)
+            zs = torch.sum(zs, dim=0)
+            feats.append(zs)
+        feats = torch.stack(feats)
 
-    def forward(self, x, corner_edge_pairs, edge_corner, num_corners, aggregate=False):
+        return feats
+
+    def forward(self, x, ls):
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
         x = self.maxpool(x)
-
-        if aggregate:
-            x = self.layer1(x)
-            x = self.aggregate(x, corner_edge_pairs, edge_corner, num_corners)
-            x = self.layer2(x)
-            x = self.aggregate(x, corner_edge_pairs, edge_corner, num_corners)            
-            x = self.layer3(x)
-            x = self.aggregate(x, corner_edge_pairs, edge_corner, num_corners)            
-            x = self.layer4(x)
-            x = self.aggregate(x, corner_edge_pairs, edge_corner, num_corners)            
-        else:
-            x = self.layer1(x)
-            x = self.layer2(x)
-            x = self.layer3(x)
-            x = self.layer4(x)
-            pass
-
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
-        y = self.fc1(x)
-        z = self.relu(y)
-        z = self.fc2(z)
 
-        pred = torch.sigmoid(z).view(-1)
-        return pred, y
+        # y = self.aggregate(ls)
+        # z = torch.cat([x, y], -1)
+        x = self.fc(x)
+        
+        pred = torch.sigmoid(x).view(-1)
+        return pred
 
 class ResNetLoop(nn.Module):
     def __init__(self, options):
@@ -438,7 +412,7 @@ class ResNetLoop(nn.Module):
         num_corners = len(corners)        
         edge_pred = self.edge_pred(x, corner_edge_pair, edge_corner, num_corners, aggregate='sharing' in self.options.suffix)
 
-        all_loops = findLoopsModule(edge_pred, edge_corner, num_corners, self.options.max_num_loop_corners, corners=corners, disable_colinear=True)
+        all_loops = findLoopsModule(edge_pred, edge_corner, num_corners, self.options.max_num_loop_corners)
 
         loop_features = []
         loop_corners = []
@@ -491,7 +465,7 @@ def create_model(options):
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = CustomResNet(pretrained=True)
+    model = ResNetBatch(options, BasicBlock, [3, 4, 6, 3], num_classes=1)
     if options.restore == 0:
         state_dict = model_zoo.load_url(model_urls['resnet34'])
         state = model.state_dict()
@@ -645,7 +619,7 @@ class GraphModelCustom(nn.Module):
         edge_pred = torch.sigmoid(self.edge_pred(x), ).view(-1)
         
         if 'loop' in self.options.suffix:
-            all_loops = findLoopsModule(edge_pred, edge_corner, num_corners, self.options.max_num_loop_corners, corners=corners, disable_colinear=True)
+            all_loops = findLoopsModule(edge_pred, edge_corner, num_corners, self.options.max_num_loop_corners)
 
             loop_features = []
             loop_corners = []
