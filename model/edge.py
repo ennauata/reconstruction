@@ -6,6 +6,30 @@ import numpy as np
 from model.modules import findLoopsModule, findMultiLoopsModule
 from model.resnet import BasicBlock, conv1x1
 from maskrcnn_benchmark.layers import roi_align
+import sparseconvnet as scn
+
+def sample_points(edges, density):
+    num_points = torch.round(torch.norm(edges[:, :2] - edges[:, 2:4], dim=-1) * density).long()
+    points = []
+    for edge_index in range(len(num_points)):
+        offsets = torch.rand(num_points[edge_index]).cuda().unsqueeze(-1)
+        points.append(edges[edge_index, :2] + (edges[edge_index, 2:4] - edges[edge_index, :2]) * offsets)
+        continue
+    points = torch.cat(points, dim=0)
+    return points
+
+def edge_points(UVs, edges, size, distance_threshold=3):
+    edges = edges * size
+    directions = edges[:, 2:4] - edges[:, :2]
+    lengths = torch.norm(directions, dim=-1)
+    directions = directions / torch.clamp(lengths.unsqueeze(-1), min=1e-4)
+    normals = torch.stack([directions[:, 1], -directions[:, 0]], dim=-1)
+    normal_distances = torch.abs(((UVs - edges[:, :2]) * normals).sum(-1))
+    direction_distances = ((UVs - edges[:, :2]) * directions).sum(-1)
+    edge_mask = (normal_distances <= distance_threshold) & (direction_distances <= lengths) & (direction_distances >= 0) | (torch.norm(UVs - edges[:, :2], dim=-1) <= distance_threshold) | (torch.norm(UVs - edges[:, 2:4], dim=-1) <= distance_threshold)
+    edge_mask = edge_mask.max(-1)[0]
+    points = edge_mask.nonzero()
+    return points
 
 class LoopEncoder(nn.Module):
     def __init__(self, num_input_channels):
@@ -83,8 +107,8 @@ class LoopEncoderMask(nn.Module):
         self.mask_size = 28
         self.pool_size = 14
         self.max_pool = nn.MaxPool2d(kernel_size=self.mask_size // self.pool_size, stride=self.mask_size // self.pool_size)
-        self.Us = torch.arange(self.mask_size).float().cuda().repeat((self.mask_size, 1))
-        self.Vs = torch.arange(self.mask_size).float().cuda().unsqueeze(-1).repeat((1, self.mask_size))
+        self.Us = torch.arange(self.mask_size).float().cuda().repeat((self.mask_size, 1)) + 0.5
+        self.Vs = torch.arange(self.mask_size).float().cuda().unsqueeze(-1).repeat((1, self.mask_size)) + 0.5
         self.UVs = torch.stack([self.Vs, self.Us], dim=-1)        
         return
     
@@ -193,6 +217,61 @@ class EdgeEncoder(nn.Module):
         x = x.max(-1)[0]
         x = self.edge_feature(x)
         pred = torch.sigmoid(self.edge_pred(x)).view(-1)
+        return pred
+
+class SparseEncoder(nn.Module):
+    def __init__(self, num_input_channels, full_scale=256):
+        super(SparseEncoder, self).__init__()
+
+        dimension = 2        
+        m = 32
+        residual_blocks = True
+        block_reps = 2
+        self.full_scale = full_scale
+        self.distance_threshold = 3 if full_scale <= 64 else 5
+        blocks = [['b', m * k, 2, 2] for k in [1, 2, 3, 4, 5]]
+        num_final_channels = m * len(blocks)
+        self.sparse_model = scn.Sequential().add(
+            scn.InputLayer(dimension, full_scale, mode=4)).add(
+            scn.SubmanifoldConvolution(dimension, num_input_channels, m, 3, False)).add(
+            scn.MaxPooling(dimension, 3, 2)).add(
+            scn.SparseResNet(dimension, m, blocks)).add(
+            scn.BatchNormReLU(num_final_channels)).add(
+            scn.SparseToDense(dimension, num_final_channels))
+
+        self.pred = nn.Sequential(nn.Linear(num_final_channels, 64), nn.ReLU(), nn.Linear(64, 1))
+        
+        self.density = full_scale
+
+        self.Us = torch.arange(full_scale).float().cuda().repeat((full_scale, 1)) + 0.5
+        self.Vs = torch.arange(full_scale).float().cuda().unsqueeze(-1).repeat((1, full_scale)) + 0.5
+        self.UVs = torch.stack([self.Vs, self.Us], dim=-1).unsqueeze(-2)
+        return
+
+    def forward(self, image_x, all_edges):
+        all_points = []
+        all_indices = []
+        for edge_index, edges in enumerate(all_edges):
+            points = edge_points(self.UVs, edges, self.full_scale, distance_threshold=self.distance_threshold)
+            all_points.append(points)
+            all_indices.append(torch.full((len(points), 1), edge_index).cuda().long())
+            continue
+
+        all_points = torch.cat(all_points, dim=0)        
+        coords = torch.cat([all_points, torch.cat(all_indices, dim=0)], dim=-1)
+
+        all_points = all_points.float() / self.full_scale * 2 - 1
+        all_points = torch.stack([all_points[:, 1], all_points[:, 0]], dim=-1)        
+        all_points = all_points.unsqueeze(0).unsqueeze(0)
+        image_features = torch.nn.functional.grid_sample(image_x, all_points)
+        image_features = image_features.view(image_x.shape[1], -1).transpose(0, 1)
+        x = self.sparse_model((coords, image_features))
+        pred = torch.sigmoid(self.pred(x.squeeze(-1).squeeze(-1))).view(-1)
+        # cv2.imwrite('test/image.png', (image_x[0, :3].detach().cpu().numpy().transpose((1, 2, 0)) * 255).astype(np.uint8))
+        # for mask_index, mask in enumerate((x[:, :3].detach().cpu().numpy().transpose((0, 2, 3, 1)) * 255).astype(np.uint8)):
+        #     cv2.imwrite('test/mask_' + str(mask_index) + '.png', mask)
+        #     continue
+        # exit(1)
         return pred    
         
 class LoopModel(nn.Module):
@@ -223,9 +302,13 @@ class LoopModel(nn.Module):
         self.decoder_1 = nn.Sequential(nn.ConvTranspose2d(128, 64, kernel_size=4, padding=1, stride=2), nn.BatchNorm2d(64), nn.ReLU())
         self.decoder_0 = nn.Sequential(nn.Upsample(scale_factor=2, mode='bilinear'), nn.Conv2d(64, 1, kernel_size=1))
 
-        self.loop_encoder = LoopEncoderMask(64 + 2)        
-        self.edge_encoder = EdgeEncoder(64 + 2)        
-
+        #self.loop_pred = LoopEncoderMask(64 + 2)        
+        self.edge_pred = EdgeEncoder(64 + 2)
+        self.loop_pred = SparseEncoder(64, 127)        
+        self.multi_loop_pred = SparseEncoder(64, 127)
+        self.multi_loop_pred_mask = SparseEncoder(1, 127)        
+        #self.multi_loop_pred = SparseEncoder(4, 256)
+        
         # self.coord_layer_1 = nn.Sequential(nn.Conv2d(4, 64, kernel_size=1), nn.BatchNorm2d(64), nn.ReLU())
         # self.coord_layer_2 = nn.Sequential(nn.Conv2d(64, 128, kernel_size=1), nn.BatchNorm2d(128), nn.ReLU())
         # self.coord_layer_3 = nn.Sequential(nn.Conv2d(128, 256, kernel_size=1), nn.BatchNorm2d(256), nn.ReLU())
@@ -372,14 +455,14 @@ class LoopModel(nn.Module):
         image_x_1_up = self.decoder_1(torch.cat([image_x_2_up, image_x_1], dim=1))                                           
         edge_image_pred = torch.sigmoid(self.decoder_0(image_x_1_up))
 
-        edge_pred = self.edge_encoder(image_x_1.squeeze(0), edges)
+        edge_pred = self.edge_pred(image_x_1_up.squeeze(0), edges)
         num_corners = len(corners)
         all_loops = findLoopsModule(edge_pred, edge_corner, num_corners, max_num_loop_corners=len(corners), corners=corners, disable_colinear=True)
 
         #loop_pred = []
         loop_corner_indices = []
         loop_corners = []        
-        loop_edges = []
+        loop_edge_masks = []
         loop_confidence = []
         max_confidence = max([confidence.max() for confidence, loops in all_loops])
         for confidence, loops in all_loops:
@@ -394,20 +477,31 @@ class LoopModel(nn.Module):
 
                 loop_corner_pairs = torch.cat([torch.stack([loop, torch.cat([loop[-1:], loop[:-1]], dim=0)], dim=-1), torch.stack([torch.cat([loop[-1:], loop[:-1]], dim=0), loop], dim=-1)], dim=0)
                 loop_edge_mask = (edge_corner.unsqueeze(1) == loop_corner_pairs).min(-1)[0]
-                loop_edges.append(loop_edge_mask.max(-1)[0].float())
+                loop_edge_masks.append(loop_edge_mask.max(-1)[0].float())
                 
                 loop_confidence.append(confidence[loop_index])
                 # loop_edge_mask = torch.max(loop_edge_mask[:, :loop_edge_mask.shape[-1] // 2], loop_edge_mask[:, loop_edge_mask.shape[-1] // 2:])
                 # loop_edge = loop_edge_mask.max(0)[1]                                                
                 continue
             continue
-        loop_info = list(zip(loop_corner_indices, loop_edges, loop_corners))
+        loop_info = list(zip(loop_corner_indices, loop_edge_masks, loop_corners))
         loop_confidence = torch.stack(loop_confidence)
         
-        loop_edges = torch.stack(loop_edges, dim=0)
-        loop_pred = self.loop_encoder(image_x_1[0], loop_corners)        
-
+        loop_edge_masks = torch.stack(loop_edge_masks, dim=0)
+        #loop_pred = self.loop_pred(image_x_1_up[0], loop_corners)
+        loop_edges = [edges[loop_edge_masks[index].nonzero()[:, 0]] for index in range(len(loop_edge_masks))]        
+        loop_pred = self.loop_pred(image_x_1_up, loop_edges)
+        
         #print(edge_pred)
-        multi_loop_edges = findMultiLoopsModule(loop_confidence, loop_info, edge_corner, num_corners, self.options.max_num_loop_corners, corners=corners, disable_colinear=True, edge_pred=edge_pred)
-        multi_loop_pred = torch.cat([torch.ones(1), torch.zeros(len(multi_loop_edges) - 1)], dim=0).cuda()
-        return edge_image_pred, [[edge_pred, loop_pred, loop_edges, multi_loop_pred, multi_loop_edges]]
+        #multi_loop_edge_masks = findMultiLoopsModule(loop_confidence, loop_info, edge_corner, num_corners, self.options.max_num_loop_corners, corners=corners, disable_colinear=True, edge_pred=edge_pred)
+        multi_loop_edge_masks = findMultiLoopsModule(loop_pred, loop_info, edge_corner, num_corners, self.options.max_num_loop_corners, corners=corners, disable_colinear=True, edge_pred=edge_pred)
+        multi_loop_edges = [edges[multi_loop_edge_masks[index].nonzero()[:, 0]] for index in range(len(multi_loop_edge_masks))]
+        #print(multi_loop_edge_masks)
+        multi_loop_pred = self.multi_loop_pred(image_x_1_up, multi_loop_edges)
+        multi_loop_pred_mask = self.multi_loop_pred_mask(torch.ones((1, 1, 128, 128)).cuda(), multi_loop_edges)        
+        #max_mask = (torch.arange(len(multi_loop_pred)).cuda().long() == multi_loop_pred.max(0)[1]).float()
+        #multi_loop_pred = multi_loop_pred * (1 - max_mask) + max_mask
+        #multi_loop_pred = max_mask
+        #multi_loop_pred = torch.cat([torch.ones(1), torch.zeros(len(multi_loop_edges) - 1)], dim=0).cuda()
+        multi_loop_predictions = torch.LongTensor([multi_loop_pred.max(0)[1], multi_loop_pred_mask.max(0)[1], 0, (multi_loop_edge_masks * (edge_pred - 0.5)).sum(-1).max(0)[1]]).cuda()
+        return edge_image_pred, [[edge_pred, loop_pred, loop_edge_masks, multi_loop_pred, multi_loop_edge_masks, multi_loop_predictions, multi_loop_pred_mask]]

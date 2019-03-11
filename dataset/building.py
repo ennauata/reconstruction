@@ -745,12 +745,15 @@ class Building():
         corner_map_det_to_annot = {}
         for (i, j) in assignment_filtered:
             if j in corner_map_det_to_annot:
-                corner_map_det_to_annot[j].append(i)
+                #corner_map_det_to_annot[j].append(i)
+                if dist[i, j] < dist[corner_map_det_to_annot[j][0], j]:
+                    corner_map_det_to_annot[j] = [i]
+                    pass
             else:
                 corner_map_det_to_annot[j] = [i]
             gt_c[j] = 1
 
-        # get edges gt 
+        # get edges gt
         for k, e_det in enumerate(edges_inds_dets):
             det_i, det_j = e_det
             if (gt_c[det_i] == 1) and (gt_c[det_j] == 1):
