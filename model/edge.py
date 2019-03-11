@@ -303,10 +303,11 @@ class LoopModel(nn.Module):
         self.decoder_0 = nn.Sequential(nn.Upsample(scale_factor=2, mode='bilinear'), nn.Conv2d(64, 1, kernel_size=1))
 
         #self.loop_pred = LoopEncoderMask(64 + 2)        
-        self.edge_pred = EdgeEncoder(64 + 2)
+        #self.edge_pred = EdgeEncoder(64 + 2)
+        self.edge_pred = SparseEncoder(64, 127)
         self.loop_pred = SparseEncoder(64, 127)        
         self.multi_loop_pred = SparseEncoder(64, 127)
-        self.multi_loop_pred_mask = SparseEncoder(1, 127)        
+        #self.multi_loop_pred_mask = SparseEncoder(1, 127)        
         #self.multi_loop_pred = SparseEncoder(4, 256)
         
         # self.coord_layer_1 = nn.Sequential(nn.Conv2d(4, 64, kernel_size=1), nn.BatchNorm2d(64), nn.ReLU())
@@ -455,7 +456,8 @@ class LoopModel(nn.Module):
         image_x_1_up = self.decoder_1(torch.cat([image_x_2_up, image_x_1], dim=1))                                           
         edge_image_pred = torch.sigmoid(self.decoder_0(image_x_1_up))
 
-        edge_pred = self.edge_pred(image_x_1_up.squeeze(0), edges)
+        #edge_pred = self.edge_pred(image_x_1_up.squeeze(0), edges)
+        edge_pred = self.edge_pred(image_x_1_up, edges.unsqueeze(1))
         num_corners = len(corners)
         all_loops = findLoopsModule(edge_pred, edge_corner, num_corners, max_num_loop_corners=len(corners), corners=corners, disable_colinear=True)
 
@@ -498,10 +500,10 @@ class LoopModel(nn.Module):
         multi_loop_edges = [edges[multi_loop_edge_masks[index].nonzero()[:, 0]] for index in range(len(multi_loop_edge_masks))]
         #print(multi_loop_edge_masks)
         multi_loop_pred = self.multi_loop_pred(image_x_1_up, multi_loop_edges)
-        multi_loop_pred_mask = self.multi_loop_pred_mask(torch.ones((1, 1, 128, 128)).cuda(), multi_loop_edges)        
+        #multi_loop_pred_mask = self.multi_loop_pred_mask(torch.ones((1, 1, 128, 128)).cuda(), multi_loop_edges)        
         #max_mask = (torch.arange(len(multi_loop_pred)).cuda().long() == multi_loop_pred.max(0)[1]).float()
         #multi_loop_pred = multi_loop_pred * (1 - max_mask) + max_mask
         #multi_loop_pred = max_mask
         #multi_loop_pred = torch.cat([torch.ones(1), torch.zeros(len(multi_loop_edges) - 1)], dim=0).cuda()
-        multi_loop_predictions = torch.LongTensor([multi_loop_pred.max(0)[1], multi_loop_pred_mask.max(0)[1], 0, (multi_loop_edge_masks * (edge_pred - 0.5)).sum(-1).max(0)[1]]).cuda()
-        return edge_image_pred, [[edge_pred, loop_pred, loop_edge_masks, multi_loop_pred, multi_loop_edge_masks, multi_loop_predictions, multi_loop_pred_mask]]
+        multi_loop_predictions = torch.LongTensor([multi_loop_pred.max(0)[1], 0, (multi_loop_edge_masks * (edge_pred - 0.5)).sum(-1).max(0)[1]]).cuda()
+        return edge_image_pred, [[edge_pred, loop_pred, loop_edge_masks, multi_loop_pred, multi_loop_edge_masks, multi_loop_predictions]]

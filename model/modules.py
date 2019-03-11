@@ -183,10 +183,25 @@ def findLoopsModule(edge_confidence, edge_corner, num_corners, max_num_loop_corn
                 pass            
             loops.append((loop_confidence[same_mask], loop[same_mask]))
         else:
-            loops.append((loop_confidence, loop))
+            #loops.append((loop_confidence, loop))
             pass
         continue
+    if len(loops) == 0:
+        _, loop_edge = torch.sort(edge_confidence, descending=True)
+        loop_edge = loop_edge[:num_corners]
 
+        ## Find loop corners along the loop
+        loop_corners = edge_corner[loop_edge]
+        if torch.norm(corners[loop_corners[0, 0]] - corners[loop_corners[-1]], dim=-1).min() > torch.norm(corners[loop_corners[0, 1]] - corners[loop_corners[-1]], dim=-1).min():
+            loop_corners = torch.cat([torch.cat([loop_corners[:1, 1:2], loop_corners[:1, 0:1]], dim=1), loop_corners[1:]], dim=0)
+            pass
+        loop_corners_prev = torch.cat([loop_corners[-1:], loop_corners[:-1]], dim=0)
+        distances = torch.stack([torch.norm(corners[loop_corners[:, 0]] - corners[loop_corners_prev[:, 1]], dim=-1), torch.norm(corners[loop_corners[:, 1]] - corners[loop_corners_prev[:, 1]], dim=-1)], dim=-1)
+        corner_indices = torch.cat([torch.zeros(1).long().cuda(), distances.min(-1)[1][1:]], dim=0)
+        corner_indices = torch.cumsum(corner_indices, dim=0) % 2
+        loop_corners = loop_corners[torch.arange(len(distances)).cuda().long(), corner_indices]
+        loops.append((edge_confidence[loop_edge].mean(0, keepdim=True), loop_corners.unsqueeze(0)))
+        pass
     
     # paths = paths[1:]
     # loops = []
@@ -328,6 +343,7 @@ def findMultiLoopsModule(loop_confidence, loop_info, edge_corner, num_corners, m
     # min_area = loop_masks.sum(-1).sum(-1).min()
     # area_threshold = min(min_area // 2, 50)    
     #overlap_mask = (loop_masks.unsqueeze(1) & loop_masks).sum(-1).sum(-1).float() / (loop_masks.unsqueeze(1) | loop_masks).sum(-1).sum(-1).float() > 0.7
+    overlap_mask = torch.zeros((num_loops, num_loops)).cuda().byte()    
     overlap_indices = same_edge_mask.nonzero()
     if len(overlap_indices) > 0:
         loop_areas = loop_masks.sum(-1).sum(-1).float()        
@@ -341,7 +357,6 @@ def findMultiLoopsModule(loop_confidence, loop_info, edge_corner, num_corners, m
             union = (overlap_loop_masks[:, 0] | overlap_loop_masks[:, 1]).sum(-1).sum(-1).float()
             IOU_mask = intersection / union > 0.7
             #IOU_mask = IOU_mask | (intersection < 0.9 * overlap_loop_areas.min(-1)[0])
-            overlap_mask = torch.zeros((num_loops, num_loops)).cuda().byte()
             overlap_mask = overlap_mask.index_put_((overlap_indices[:, 0], overlap_indices[:, 1]), IOU_mask)
             pass
         pass

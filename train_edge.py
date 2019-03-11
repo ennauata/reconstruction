@@ -186,7 +186,7 @@ def main(options):
                     #     multi_loop_gt = (torch.arange(len(multi_loop_edge)).cuda() == (multi_loop_edge * edge_gt).sum(-1).max(0)[1]).float()
                     #     pass
 
-                    losses.append(F.binary_cross_entropy(result[6], multi_loop_gt))                    
+                    #losses.append(F.binary_cross_entropy(result[6], multi_loop_gt))                    
                     if multi_loop_gt.sum() > 1.5:
                         multi_loop_gt = (torch.arange(len(multi_loop_edge)).cuda() == ((multi_loop_edge * edge_gt).sum(-1) * multi_loop_gt).max(0)[1]).float()
                         pass
