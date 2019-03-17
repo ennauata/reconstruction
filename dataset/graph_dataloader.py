@@ -29,7 +29,7 @@ class GraphData(Dataset):
             pass                
         self.buildings = []
         for _id in id_list:
-            #_id = '1548722484.99'
+            #_id = '1548711056.64'
             corner_types = []
             corner_type = options.corner_type if split == 'train' else options.testing_corner_type
             if 'annots_dets' in corner_type:
@@ -48,7 +48,7 @@ class GraphData(Dataset):
                     if num_edges > building.current_num_edges():
                         continue
                     elif num_edges < building.current_num_edges() and num_edges >= 0:
-                        building.reset(num_edges)
+                        #building.reset(num_edges)
                         pass
                     pass
                 self.buildings.append(building)
@@ -56,6 +56,12 @@ class GraphData(Dataset):
             if len(self.buildings) >= self.num_images:
                 break
             continue
+
+        # if split != 'train':
+        #     self.buildings = self.buildings[-50:]
+        #     self.num_images = 50
+        #     pass
+        
         #self.buildings = self.buildings[-6:-5]
         #self.num_images = len(self.buildings)
         
