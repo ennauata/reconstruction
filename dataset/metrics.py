@@ -145,22 +145,18 @@ class Metrics():
         
     #     return
 
-    def forward(self, corner_list_pred, edge_list_pred, building, thresh=4.0):
+    def forward(self, building, thresh=4.0):
 
         gts = np.array(building.corners_annot)[:, :2]
-        corner_list_pred = np.array(corner_list_pred)
-        if corner_list_pred.shape[0] > 0:
-            dets = np.array(building.corners_det[corner_list_pred])
-        else:
-            dets = np.array([])
-
+        dets = building.corners_det
+        
         per_sample_corner_tp = 0.0
         per_sample_corner_fp = 0.0
         found = [False] * gts.shape[0]
         c_det_annot = {}
 
         # for each corner detection
-        for l, det in enumerate(dets):
+        for i, det in enumerate(dets):
 
             # get closest gt
             near_gt = [0, 9999999.0, (0.0, 0.0)]
@@ -173,7 +169,7 @@ class Metrics():
             if near_gt[1] <= thresh and not found[near_gt[0]]:
                 per_sample_corner_tp += 1.0
                 found[near_gt[0]] = True
-                c_det_annot[corner_list_pred[l]] = near_gt[0]
+                c_det_annot[i] = near_gt[0]
 
             # not hit or already found
             else:
@@ -186,12 +182,13 @@ class Metrics():
         self.per_corner_sample_score.update({building._id: {'recall': per_sample_corner_tp/gts.shape[0], 'precision': per_sample_corner_tp/(per_sample_corner_tp+per_sample_corner_fp+1e-8)}}) 
 
         # for each edge detection
-        edge_list_pred = np.array(edge_list_pred)
+        #edge_list_pred = np.array(edge_list_pred)
         per_sample_edge_tp = 0.0
         per_sample_edge_fp = 0.0
 
         # for each detected edge
-        for l, e_det in enumerate(edge_list_pred):
+        #for l, e_det in enumerate(edge_list_pred):
+        for l, e_det in enumerate(building.edge_corner):
             c1, c2 = e_det
             
             # check if corners are mapped
@@ -220,7 +217,8 @@ class Metrics():
         self.n_edge_samples += building.edge_corner_annots.shape[0]
         self.per_edge_sample_score.update({building._id: {'recall': per_sample_edge_tp/building.edge_corner_annots.shape[0], 'precision': per_sample_edge_tp/(per_sample_edge_tp+per_sample_edge_fp+1e-8)}}) 
 
-        return
+        statistics = np.array([per_sample_corner_tp, per_sample_corner_fp, gts.shape[0], per_sample_edge_tp, per_sample_edge_fp, building.edge_corner_annots.shape[0]])
+        return statistics
 
     # def _forward_edges(building, thresh=8.0):
 

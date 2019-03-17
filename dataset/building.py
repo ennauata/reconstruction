@@ -409,7 +409,7 @@ class Building():
                 continue
             edge_images = np.stack(edge_images, axis=0)
             #return [imgs.astype(np.float32), edge_images.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.graph_edge_index, self.graph_edge_attr, self.left_edges.astype(np.int64), self.right_edges.astype(np.int64)]
-            return [imgs.astype(np.float32), corner_masks.astype(np.float32), edge_images.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.corner_edge_pairs, self.edge_corner, self.left_edges.astype(np.int64), self.right_edges.astype(np.int64), self.corners_annot, self.edges_annot]
+            return [imgs.astype(np.float32), corner_masks.astype(np.float32), edge_images.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.corner_edge_pairs, self.edge_corner, self.left_edges.astype(np.int64), self.right_edges.astype(np.int64)]
         else:
             return [imgs.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.graph_edge_index, self.graph_edge_attr]
 
@@ -2021,6 +2021,7 @@ class Building():
         dot_product_threshold = np.cos(np.deg2rad(20))        
         directions = (self.edges_det[:, 2:4] - self.edges_det[:, :2]).astype(np.float32)
         directions = directions / np.maximum(np.linalg.norm(directions, axis=-1, keepdims=True), 1e-4)
+        new_edge_corner_annots = []
         while True:
             has_change = False
             for edge_index_1, edge_gt_1 in enumerate(self.edges_gt):
@@ -2052,4 +2053,107 @@ class Building():
             if not has_change:
                 break
             continue
+        return
+
+
+    def post_process(self, edge_state):
+        dot_product_threshold = np.cos(np.deg2rad(20))    
+        distance_threshold = 0.02
+
+        edge_corner = self.edge_corner[edge_state]
+        corners = self.corners_det.astype(np.float32) / 256
+        
+        num_edges = len(edge_corner)
+        
+        edges = corners[edge_corner]
+        edge_directions = edges[:, 1] - edges[:, 0]
+        edge_lengths = np.maximum(np.linalg.norm(edge_directions, axis=-1), 1e-4)
+        edge_directions = edge_directions / np.expand_dims(edge_lengths, -1)
+        edge_normals = np.stack([edge_directions[:, 1], -edge_directions[:, 0]], axis=-1)
+
+        # edge_centers = edges[:, 0] + edges[:, 1]) / 2
+
+        # normal_distance = np.abs(((np.expand_dims(edge_centers, 1) - edges[:, 0]) * edge_normals).sum(-1))
+        # normal_distance = np.minimum(normal_distance, normal_distance.transpose())
+        # colinear_mask = normal_distance > dot_product_threshold
+
+        # tangent_distance_1 = ((expand_dims(edges[:, 0], 1) - edges[:, 0]) * edge_directions).sum(-1)
+        # tangent_distance_2 = ((expand_dims(edges[:, 1], 1) - edges[:, 0]) * edge_directions).sum(-1)    
+        # non_overlap_mask = (tangent_distance_1 < -1e-4 & tangent_distance_2 < -1e-4) | (tangent_distance_1 > 1 - 1e-4 & tangent_distance_2 > 1 - 1e-4)
+
+        # num_edges = len(edge_pred)
+        # edge_mapping = np.arange(num_edges, dtype=np.int32)
+        # for edge_index_1 in range(num_edges):
+        #     for edge_index_2 in range(num_edges):        
+        #         if edge_index_2 <= edge_index_1:
+        #             continue
+
+        connected_mask = (np.expand_dims(np.expand_dims(edge_corner, -1), 1) == np.expand_dims(np.expand_dims(edge_corner, -2), 0)).any(-1).any(-1)
+
+        normal_distance = np.abs(((np.expand_dims(corners, 1) - edges[:, 0]) * edge_normals).sum(-1))
+        tangent_distance = ((np.expand_dims(corners, 1) - edges[:, 0]) * edge_directions).sum(-1)
+        #independent_mask = np.ones((len(corners), num_edges))
+        #independent_mask[edge_corner[:, 0], np.arange(len(edge_corner), dtype=np.int32)] = 0
+        #independent_mask[edge_corner[:, 1], np.arange(len(edge_corner), dtype=np.int32)] = 0
+
+        corner_edge_mask = (tangent_distance > 0) & (tangent_distance < 1) & (normal_distance < distance_threshold)
+        parallel_mask = np.abs((np.expand_dims(edge_directions, 1) * edge_directions).sum(-1)) > dot_product_threshold
+        colinear_mask = np.maximum(corner_edge_mask[edge_corner[:, 0]], corner_edge_mask[edge_corner[:, 1]]) & parallel_mask
+        edge_groups = []
+        visited_mask = np.zeros(num_edges, dtype=np.bool)
+        for edge_index in range(num_edges):
+            if visited_mask[edge_index] > 0:
+                continue
+            edge_group = np.arange(num_edges, dtype=np.int32) == edge_index
+            while True:
+                new_edge_group = np.maximum(colinear_mask[edge_group].max(0), edge_group)
+                if (new_edge_group == edge_group).all():
+                    break
+                edge_group = new_edge_group
+                continue
+            visited_mask = np.maximum(visited_mask, edge_group)
+            edge_groups.append(edge_group.nonzero()[0])
+            continue
+        edge_lines = np.zeros((num_edges, 2))
+        for edge_group in edge_groups:
+            corner_indices = np.unique(edge_corner[edge_group].reshape(-1))
+            edge_corners = corners[corner_indices]
+            line = np.linalg.lstsq(edge_corners, np.ones(edge_corners.shape[0]), rcond=None)[0]
+            edge_lines[edge_group] = line
+            pass
+
+        corner_edge_mask[edge_corner[:, 0], np.arange(len(edge_corner), dtype=np.int32)] = 1
+        corner_edge_mask[edge_corner[:, 1], np.arange(len(edge_corner), dtype=np.int32)] = 1
+        visited_corner_mask = np.zeros(len(corners), dtype=np.bool)
+        #intersection_mask = np.maximum(corner_edge_mask[edge_corner[:, 0]], corner_edge_mask[edge_corner[:, 1]]) & np.logical_not(parallel_mask)
+        for edge_index_1, corner_indices_1 in enumerate(edge_corner):
+            line_1 = edge_lines[edge_index_1]
+            for corner_index in corner_indices_1:
+                for edge_index_2 in range(num_edges):        
+                    if corner_edge_mask[corner_index, edge_index_2] and not colinear_mask[edge_index_1, edge_index_2]:
+                        line_2 = edge_lines[edge_index_2]
+                        corner = np.linalg.lstsq(np.stack([line_1, line_2], axis=0), np.ones(2), rcond=None)[0]
+                        corners[corner_index] = corner
+                        visited_corner_mask[corner_index] = True
+                        pass
+                    continue
+                continue
+            continue
+        corner_mapping = np.arange(len(corners), dtype=np.int32)
+        for corner_index_1, corner_1 in enumerate(corners):
+            for corner_index_2, corner_2 in enumerate(corners):
+                if corner_index_2 == corner_index_1:
+                    break
+                if np.linalg.norm(corner_1 - corner_2) < distance_threshold:
+                    corner_mapping[corner_index_1] = corner_mapping[corner_index_2]
+                    pass
+                continue
+            continue
+        _, corner_indices, corner_mapping = np.unique(corner_mapping, return_index=True, return_inverse=True)
+        #corners = corners[corner_indices]
+        edge_corner = corner_mapping[edge_corner]
+        self.edge_corner = edge_corner
+        corners = (corners * 256).astype(np.int32)
+        self.corners_det = corners
+        self.edges_det = corners[edge_corner].reshape((-1, 4))
         return

@@ -12,6 +12,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from dataset.graph_dataloader import GraphData
 from dataset.shuffle_dataloader import ShuffleData
+from dataset.metrics import Metrics
 from torch.utils.data import DataLoader
 from dataset.collate import PadCollate
 from utils.losses import balanced_binary_cross_entropy
@@ -25,6 +26,7 @@ from validator import Validator
 from options import parse_args
 from model.edge import NonLocalModelImage
 from model.modules import findLoopsModule, findBestMultiLoop
+import copy
 
 def main(options):
     ##############################################################################################################
@@ -161,7 +163,7 @@ def main(options):
             optimizer.zero_grad()        
             for sample_index, sample in enumerate(data_iterator):
 
-                im_arr, corner_images, edge_images, corners, edges, corner_gt, edge_gt, corner_edge_pairs, edge_corner, left_edges, right_edges, corners_annot, edges_annot, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(), sample[9].cuda().squeeze(), sample[10].cuda().squeeze(), sample[11].squeeze().item()
+                im_arr, corner_images, edge_images, corners, edges, corner_gt, edge_gt, corner_edge_pairs, edge_corner, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(), sample[9].cuda().squeeze(), sample[10].cuda().squeeze(), sample[11].squeeze().item()
 
                 #print(dset_train.buildings[building_index]._id)
                 #print('num edges', len(edge_gt))
@@ -299,6 +301,7 @@ def main(options):
 
 def testOneEpoch(options, model, dataset, additional_models=[], visualize=False):
     #model.eval()
+    metrics = [Metrics(), Metrics()]
     
     epoch_losses = []
     ## Same with train_loader but provide progress bar
@@ -309,9 +312,9 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
     all_images = []
     row_images = []    
     for sample_index, sample in enumerate(data_iterator):
-        im_arr, corner_images, edge_images, corners, edges, corner_gt, edge_gt, corner_edge_pairs, edge_corner, left_edges, right_edges, corners_annot, edges_annot, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(0), sample[9].cuda().squeeze(), sample[10].cuda().squeeze(), sample[11].squeeze().item()
+        im_arr, corner_images, edge_images, corners, edges, corner_gt, edge_gt, corner_edge_pairs, edge_corner, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(0), sample[9].cuda().squeeze(), sample[10].cuda().squeeze(), sample[11].squeeze().item()
 
-        im_arr, corner_images, edge_images, corners, edges, corner_gt, edge_gt, corner_edge_pairs, edge_corner, left_edges, right_edges, corners_annot, edges_annot, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(), sample[9].cuda().squeeze(), sample[10].cuda().squeeze(), sample[11].squeeze().item()
+        im_arr, corner_images, edge_images, corners, edges, corner_gt, edge_gt, corner_edge_pairs, edge_corner, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(), sample[9].cuda().squeeze(), sample[10].cuda().squeeze(), sample[11].squeeze().item()
 
         images = im_arr.unsqueeze(0)
         edge_image_pred, results = model(images, corners, edges, corner_edge_pairs, edge_corner)
@@ -420,11 +423,16 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                          multi_loop_edge_mask, debug_info = findBestMultiLoop(loop_pred, edge_pred, loop_edge_mask, result[3], edge_corner, corners)
                          images, _ = building.visualize(mode='', edge_state=multi_loop_edge_mask.detach().cpu().numpy() > 0.5, color=[255, 255, 0])
                          if sample_index % 500 < 16:
-                             cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_multi_loop_' + str(pred_index) + '_pred.png', images[0])
+                             cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_multi_loop_' + str(pred_index) + '_pred.png', images[0])
                              pass
                          row_images.append(images[0])
 
-                         evaluate_result(corners.detach().cpu().numpy(), multi_loop_edge_mask.detach().cpu().numpy() > 0.5, edge_corner.detach().cpu().numpy(), corners_annot.detach().cpu().numpy(), edges_annot.detach().cpu().numpy() > 0.5)
+                         building_final = copy.deepcopy(building)
+                         building_final.post_process(multi_loop_edge_mask.detach().cpu().numpy() > 0.5)
+                         statistics = metrics[pred_index].forward(building_final)
+                         images, _ = building_final.visualize(mode='', edge_state=np.ones(len(building_final.edge_corner), dtype=np.bool), color=[255, 255, 0], debug=True)
+                         cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_multi_loop_' + str(pred_index) + '_pred_final.png', images[0])
+                         
                          pass
                     
                     if (pred_index == len(results) - 1):
@@ -464,10 +472,16 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
             
             all_images.append(row_images)
             row_images = []
+            #exit(1)
             pass
         continue
-    
+
     if visualize:
+        for c in range(2):
+            print(c)
+            metrics[c].print_metrics()
+            continue
+    
         if len(row_images) > 0:
             all_images.append(row_images)
             pass        
