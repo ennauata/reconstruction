@@ -21,6 +21,76 @@ def draw_edge(edge_index, edges):
     cv2.line(im, (edge[1], edge[0]), (edge[3], edge[2]), thickness=3, color=1)
     return im
 
+def findLoopsModuleCPU2(edge_confidence, edge_corner, num_corners, max_num_loop_corners=10, confidence_threshold=0, corners=None, disable_colinear=True):
+    ## The confidence of connecting two corners
+    corner_confidence = torch.zeros(num_corners, num_corners)
+    corner_confidence[edge_corner[:, 0], edge_corner[:, 1]] = edge_confidence
+    corner_confidence[edge_corner[:, 1], edge_corner[:, 0]] = edge_confidence
+    corner_confidence = corner_confidence - torch.diag(torch.ones(num_corners)) * max_num_loop_corners
+    
+    corner_range = torch.arange(num_corners).long()
+    corner_range_map = corner_range.view((-1, 1)).repeat((1, num_corners))
+
+    ## Paths = [(path_confidence, path_corners)] where the ith path has a length of (i + 1), path_confidence is the summation of confidence along the path between two corners, and path_corners is visited corners along the path
+    paths = [(corner_confidence, corner_range_map.unsqueeze(-1))]
+    dot_product_threshold = np.cos(np.deg2rad(20))
+    while len(paths) < max_num_loop_corners - 1:
+        path_confidence, path_corners = paths[-1]
+        total_confidence = path_confidence.unsqueeze(-1) + corner_confidence
+        visited_mask = (path_corners.unsqueeze(-1) == corner_range).max(-2)[0]
+        if disable_colinear and path_corners.shape[-1] > 1:
+            prev_edge = corners[path_corners[:, :, -1]] - corners[path_corners[:, :, -2]]
+            prev_edge = prev_edge / torch.norm(prev_edge, dim=-1, keepdim=True)
+            current_edge = corners - corners[path_corners[:, :, -1]].unsqueeze(-2)
+            current_edge = current_edge / torch.norm(current_edge, dim=-1, keepdim=True)
+            dot_product = (prev_edge.unsqueeze(-2) * current_edge).sum(-1)
+            colinear_mask = torch.abs(dot_product) > dot_product_threshold
+            visited_mask = visited_mask | colinear_mask
+            pass
+        visited_mask = visited_mask.float()
+        #visited_mask = torch.max(visited_mask, (prev_corner.unsqueeze(1) == corner_range.unsqueeze(-1)).float())
+        total_confidence = total_confidence * (1 - visited_mask) - (max_num_loop_corners) * visited_mask
+        #print(path_confidence, total_confidence, visited_mask)        
+        #print(total_confidence, visited_mask)
+        new_path_confidence, last_corner = total_confidence.max(1)
+        existing_path = path_corners[corner_range_map.view(-1), last_corner.view(-1)].view((num_corners, num_corners, -1))
+        new_path_corners = torch.cat([existing_path, last_corner.unsqueeze(-1)], dim=-1)
+        paths.append((new_path_confidence, new_path_corners))
+        continue
+    #print(paths)
+    ## Find closed loops by adding the starting point to the path
+    paths = paths[1:]
+    loops = []
+    for index, (path_confidence, path_corners) in enumerate(paths):
+        total_confidence = path_confidence.unsqueeze(-1) + corner_confidence
+        visited_mask = (path_corners[:, :, 1:].unsqueeze(-1) == corner_range).float().max(-2)[0]
+        total_confidence = total_confidence * (1 - visited_mask) - (max_num_loop_corners) * visited_mask
+        #print(total_confidence, visited_mask)
+        loop_confidence, last_corner = total_confidence.max(1)
+        last_corner = last_corner.diagonal()
+        loop = path_corners[corner_range, last_corner].view((num_corners, -1))
+        loop = torch.cat([loop, last_corner.unsqueeze(-1)], dim=-1)
+        loop_confidence = loop_confidence.diagonal() / (index + 3)
+        mask = loop_confidence > confidence_threshold
+        if mask.sum().item() == 0:
+            loop_confidence, index = loop_confidence.max(0, keepdim=True)
+            index = index.squeeze().item()
+            loops.append((loop_confidence, loop[index:index + 1]))
+            continue
+        loop_confidence = loop_confidence[mask]
+        loop = loop[mask]
+        if len(loop) > 0:
+            same_mask = torch.abs(loop.unsqueeze(1).unsqueeze(0) - loop.unsqueeze(-1).unsqueeze(1)).min(-1)[0].max(-1)[0] == 0
+            loop_range = torch.arange(len(loop)).long()
+            same_mask = same_mask & (loop_range.unsqueeze(-1) > loop_range.unsqueeze(0))
+            same_mask = same_mask.max(-1)[0]^1
+            loops.append((loop_confidence[same_mask], loop[same_mask]))
+        else:
+            loops.append((loop_confidence, loop))
+            pass
+        continue
+    return loops
+
 def findLoopsModuleCPU(edge_confidence, edge_corner, num_corners, max_num_loop_corners=10, confidence_threshold=0):
     ## The confidence of connecting two corners
     corner_confidence = torch.zeros(num_corners, num_corners)
@@ -166,7 +236,7 @@ class Building():
         ce_angles_bins = None
 
         # read images
-        self.rgb = self.read_rgb(_id, self.dataset_folder)
+        self.rgb = self.read_input_images(_id, self.dataset_folder)
         #self.imgs = self.read_input_images(_id, self.dataset_folder)
 
         self.edge_corner_annots = edge_corner_annots
@@ -940,7 +1010,7 @@ class Building():
 
         if 'draw_annot' in mode:    
             corner_annot, corner_masks = self.compute_corner_image(np.array(self.corners_annot).astype('int'))
-            corner_image_annot = self.imgs.copy()
+            corner_image_annot = self.rgb.copy()
             corner_image_annot[corner_annot > 0.5] = np.array([255, 0, 0], dtype=np.uint8)
             images.append(corner_image_annot)
 
@@ -951,6 +1021,22 @@ class Building():
 
         return images, np.array([(np.logical_and(self.predicted_edges[-1] == self.edges_gt, self.edges_gt == 1)).sum(), self.predicted_edges[-1].sum(), self.edges_gt.sum(), int(np.all(self.predicted_edges[-1] == self.edges_gt))])
 
+    def visualize_multiple_loops(self, loop_edges):
+        image = self.rgb.copy()        
+        corner_image, corner_masks = self.compute_corner_image(self.corners_det)
+        image[corner_image > 0.5] = np.array([255, 0, 0], dtype=np.uint8)
+        loop_image = image.copy()
+
+        for loop in loop_edges:
+            e_inds = np.where(loop>0)[0]
+            c = np.uint8(np.random.uniform(0, 255, 3))
+            c = tuple(map(int, c))
+            for e in e_inds:
+                y1, x1, y2, x2 = self.edges_det[e]
+                cv2.line(loop_image, (x1, y1), (x2, y2), thickness=3, color=c)
+
+        return loop_image
+        
     def visualizeLoops(self, loop_corners, loop_state):
         image = self.imgs.copy()        
         corner_image, corner_masks = self.compute_corner_image(self.corners_det)
