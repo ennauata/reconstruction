@@ -234,7 +234,7 @@ class Building():
 
         # read images
         self.rgb = self.read_rgb(_id, self.dataset_folder)
-        self.imgs = self.read_input_images(_id, self.dataset_folder)
+        #self.imgs = self.read_input_images(_id, self.dataset_folder)
         self.edge_corner_annots = edge_corner_annots
         self.corners_gt = corners_gt                
         self.corners_det = np.round(corners_det[:, :2]).astype(np.int32)
@@ -331,9 +331,9 @@ class Building():
         #assert(num_edges_source < len(self.predicted_edges))
 
         if self.with_augmentation:
-            imgs, corners_det, edges_det = self.augment(self.imgs.copy(), self.corners_det, self.edges_det)
+            imgs, corners_det, edges_det = self.augment(self.rgb.copy(), self.corners_det, self.edges_det)
         else:
-            imgs, corners_det, edges_det = self.imgs, self.corners_det, self.edges_det
+            imgs, corners_det, edges_det = self.rgb, self.corners_det, self.edges_det
             pass
         imgs = imgs.transpose((2, 0, 1)).astype(np.float32) / 255
         
@@ -399,9 +399,9 @@ class Building():
         #assert(num_edges_source < len(self.predicted_edges))
 
         if self.with_augmentation:
-            imgs, corners_det, edges_det = self.augment(self.imgs.copy(), self.corners_det, self.edges_det)
+            imgs, corners_det, edges_det = self.augment(self.rgb.copy(), self.corners_det, self.edges_det)
         else:
-            imgs, corners_det, edges_det = self.imgs, self.corners_det, self.edges_det
+            imgs, corners_det, edges_det = self.rgb, self.corners_det, self.edges_det
             pass
 
         imgs = imgs.transpose((2, 0, 1)).astype(np.float32) / 255
@@ -427,9 +427,9 @@ class Building():
         #assert(num_edges_source < len(self.predicted_edges))
 
         if self.with_augmentation:
-            imgs, corners_det, edges_det = self.augment(self.imgs.copy(), self.corners_det, self.edges_det)
+            imgs, corners_det, edges_det = self.augment(self.rgb.copy(), self.corners_det, self.edges_det)
         else:
-            imgs, corners_det, edges_det = self.imgs, self.corners_det, self.edges_det
+            imgs, corners_det, edges_det = self.rgb, self.corners_det, self.edges_det
             pass
 
         imgs = imgs.transpose((2, 0, 1)).astype(np.float32) / 255
@@ -527,7 +527,7 @@ class Building():
         #return np.array(im)
         return im
 
-    def rotate_flip(self, edges_coords, rot, flip):
+    def rotate_flip_edge(self, edges_coords, rot, flip):
         new_edges_coords = []
         for e in edges_coords:
             y1, x1, y2, x2 = e
@@ -539,6 +539,17 @@ class Building():
             e_aug = (y1, x1, y2, x2)
             new_edges_coords.append(e_aug)
         return new_edges_coords
+
+    def rotate_flip_corner(self, corner_coords, rot, flip):
+        new_coords = []
+        for c in corner_coords:
+            y1, x1  = c
+            x1, y1  = self.rotate_coords(np.array([256, 256]), np.array([x1, y1]), rot)
+            if flip:
+                x1, y1 = (128-abs(128-x1), y1) if x1 > 128 else (128+abs(128-x1), y1)
+            c_aug = (y1, x1)
+            new_coords.append(c_aug)
+        return new_coords
 
     def compute_angles(self, edges_coords, delta_degree=5.0, n_bins=36):
 
@@ -952,7 +963,7 @@ class Building():
         #print(corners)
         return imgs, corners, edges
 
-    def visualize(self, mode='last_mistake', edge_state=None, building_idx=None, post_processing=False):
+    def visualize(self, mode='last_mistake', edge_state=None, building_idx=None, post_processing=False, debug=False, color=[255, 0, 0]):
         image = self.rgb.copy()        
         corner_image, corner_masks = self.compute_corner_image(self.corners_det)
         image[corner_image > 0.5] = np.array([255, 0, 0], dtype=np.uint8)
@@ -1322,8 +1333,8 @@ class Building():
             continue
 
         return edge_groups
-    
-    def create_loops_sample_edge_features(self, phase=None):
+
+    def create_loops_sample_edge_features_im(self, phase=None, scale=2.0, res=128):
 
         with np.load('{}/{}_0_False.npz'.format(self.options.predicted_edges_path, self._id)) as data:
             edges_confidence = data['arr_0']
@@ -1336,23 +1347,58 @@ class Building():
             edges_loops = edges_loops[to_keep]
 
         loop_feats = []
+        loops_edges_ims = []
         for k, loop in enumerate(all_loops):
             rot = 0
             flip = False
-            # if phase == "train":
-            #     rot = np.random.choice([0, 90, 180, 270])
-            #     flip = np.random.choice([False, True])
+            if phase == "train":
+                rot = np.random.choice([0, 90, 180, 270])
+                flip = np.random.choice([False, True])
             with np.load('{}/{}_{}_{}.npz'.format(self.options.predicted_edges_path, self._id, rot, flip)) as data:
                 edge_feats = data['arr_1']
 
+            # compute bins
+            edges_coords_aug = self.rotate_flip(self.edges_det, rot, flip)
+            one_hot, angles = self.compute_angles(edges_coords_aug)
+
+
             inds = np.where(edges_loops[k]==1)[0]
-            y1, x1, y2, x2 = np.split(self.edges_det[inds, :]/255.0, 4, -1)
+            e_angles = one_hot[inds, :]
+
+            y1, x1, y2, x2 = np.split(np.array(edges_coords_aug)[inds, :]/255.0, 4, -1)
             alg_feats = np.concatenate([y1, x1, y2, x2, y1**2, x1**2, y2**2, x2**2, y1*x1, y1*x2, y2*x1, y2*x2], -1)
-            loop_feat = np.concatenate([edge_feats[inds, :], alg_feats], -1)
+            loop_feat = np.concatenate([edge_feats[inds, :], alg_feats, e_angles], -1)
+            drop = np.random.choice([True, False])
+            if (phase == "train") and (drop==True): 
+                loop_feat[:, :128] = 0.0
+
+            rot_rgb_im = Image.fromarray(self.rgb.copy()).resize((128, 128)).rotate(rot)
+            if flip:
+                rot_rgb_im = rot_rgb_im.transpose(Image.FLIP_LEFT_RIGHT)
+            rot_rgb_im = np.transpose(np.array(rot_rgb_im), (2, 0, 1))
+
+            loop_edges = []
+            for e_i in inds:
+                y1, x1, y2, x2 = np.array(edges_coords_aug)[e_i]/float(scale)
+                im = Image.new("L", (res, res))
+                draw = ImageDraw.Draw(im)
+                draw.line((x1, y1, x2, y2), width=2, fill='white')
+                e_im = np.concatenate([rot_rgb_im, np.array(im)[np.newaxis, :, :]], 0)
+                loop_edges.append(np.array(e_im))
+                # import matplotlib.pyplot as plt
+                # print(angles[e_i])
+                # plt.imshow(im)
+                # plt.show()
+            loop_edges = np.array(loop_edges)
 
             loop_feat = np.pad(loop_feat, ((0, 20-loop_feat.shape[0]), (0, 0)), 'constant', constant_values=0)
+            loop_edges = np.pad(loop_edges, ((0, 20-loop_edges.shape[0]), (0, 0), (0, 0), (0, 0)), 'constant', constant_values=0)
+
             loop_feats.append(loop_feat)
+            loops_edges_ims.append(loop_edges)
+
         loop_feats = np.stack(loop_feats)
+        loops_edges_ims = np.stack(loops_edges_ims)
 
         if phase == "train":
 
@@ -1371,11 +1417,111 @@ class Building():
 
             loop_feats = np.concatenate([loop_feats[pos_inds, :], loop_feats[neg_inds, :]])
             loop_labels = np.concatenate([loop_labels[pos_inds], loop_labels[neg_inds]])
+            loops_edges_ims = np.concatenate([loops_edges_ims[pos_inds, :, :], loops_edges_ims[neg_inds, :, :]])
 
         # print("neg", np.where(loop_labels==0)[0].shape)
         # print("pos", np.where(loop_labels==1)[0].shape)
+        return loop_feats, loop_labels, edges_loops, all_loops, loop_acc, loops_edges_ims
 
-        return loop_feats, loop_labels, edges_loops, all_loops, loop_acc
+    def create_loops_sample_edge_features(self, phase=None):
+
+        with np.load('{}/{}_0_False.npz'.format(self.options.predicted_edges_path, self._id)) as data:
+            edges_confidence = data['arr_0']
+            
+        all_loops, loop_labels, edges_loops, loop_acc, loops_e_inds, loops_corners = self.find_loops(edges_confidence, self.edge_corner, self.corners_det, self.edges_gt, self.corners_det.shape[0])
+        
+        if phase == "train":
+            loop_labels, to_keep = self.filter_loops(edges_loops, loop_labels)
+            all_loops = [x for k, x in enumerate(all_loops) if k in to_keep]
+            edges_loops = edges_loops[to_keep]
+
+        loop_feats = []
+        loops_edges_ims = []
+        for k, loop in enumerate(all_loops):
+            rot = 0
+            flip = False
+            if phase == "train":
+                rot = np.random.choice([0, 90, 180, 270])
+                flip = np.random.choice([False, True])
+            with np.load('{}/{}_{}_{}.npz'.format(self.options.predicted_edges_path, self._id, rot, flip)) as data:
+                edge_feats = data['arr_1']
+
+            # compute bins
+            edges_coords_aug = self.rotate_flip_edge(self.edges_det, rot, flip)
+            corner_coords_aug = self.rotate_flip_corner(self.corners_det, rot, flip)
+            one_hot, angles = self.compute_angles(edges_coords_aug)
+
+            # e_inds = np.where(edges_loops[k]==1)[0]
+            inds = loops_e_inds[k]
+            e_angles = angles[inds]
+
+            loop_corners = loops_corners[k] 
+            loop_coords = np.array([np.concatenate([corner_coords_aug[c1], corner_coords_aug[c2]]) for c1, c2 in loop_corners])
+            y1, x1, y2, x2 = np.split(loop_coords/255.0, 4, -1)
+
+            # include alg features
+            alg_feats = np.concatenate([y1, x1, y2, x2, y1**2, x1**2, y2**2, x2**2, y1*x1, y1*x2, y2*x1, y2*x2], -1)
+            alg_feats = np.concatenate([alg_feats, e_angles[:, np.newaxis]], -1)
+
+            #loop_feat = edge_feats[inds, :]
+            drop = np.random.choice([True, False])
+            if (drop == True) and (phase == "train"):
+                edge_feats = np.zeros_like(edge_feats)
+            loop_feat = np.concatenate([edge_feats[inds, :], alg_feats], -1)
+
+            #loop_feat = np.pad(loop_feat, ((0, 20-loop_feat.shape[0]), (0, 0)), 'constant', constant_values=0)
+            loop_feats.append(loop_feat)
+            #loop_feats = np.stack(loop_feats)
+
+            # # DEBUG
+            # import matplotlib.pyplot as plt
+            # rgb_im = Image.fromarray(self.rgb.copy())
+            # rgb_im = rgb_im.rotate(rot)
+            # if flip == True:
+            #     rgb_im = rgb_im.transpose(Image.FLIP_LEFT_RIGHT)
+
+            # print("LOOP")
+            # print(loop_labels[k])
+            # draw = ImageDraw.Draw(rgb_im)
+            # for l in range(np.array(corner_coords_aug).shape[0]):
+            #     y, x = corner_coords_aug[l]
+            #     draw.ellipse((x-2, y-2, x+2, y+2), fill='red')
+
+            # im = Image.new("L", (256, 256))
+            # draw = ImageDraw.Draw(im)
+            # for l in range(loop_feat.shape[0]):
+            #     y1, x1, y2, x2 = loop_feat[l, -13]*255.0, loop_feat[l, -12]*255.0, loop_feat[l, -11]*255.0, loop_feat[l, -10]*255.0 
+            #     angle = loop_feat[l, -1]
+            #     print(y1, x1, y2, x2)
+            #     print(angle)
+            #     draw.line((x1, y1, x2, y2), width=3, fill='white')
+            #     plt.figure()
+            #     plt.imshow(im)
+            #     plt.figure()
+            #     plt.imshow(rgb_im)
+            #     plt.show()
+
+        if phase == "train":
+
+            # balance samples
+            pos_inds = np.where(loop_labels==1)[0]
+            neg_inds = np.where(loop_labels==0)[0]
+            num_pos = pos_inds.shape[0]
+            num_neg = neg_inds.shape[0]
+            np.random.shuffle(neg_inds)
+            np.random.shuffle(pos_inds)
+
+            if num_pos < num_neg:
+                neg_inds = neg_inds[:max(1, 5*num_pos)]  
+            else:
+                pos_inds = pos_inds[:max(1, num_neg//5)]  
+
+            loop_feats = [loop_feats[x] for x in pos_inds] + [loop_feats[x] for x in neg_inds]
+            loop_labels = np.concatenate([loop_labels[pos_inds], loop_labels[neg_inds]])
+
+        # print("neg", np.where(loop_labels==0)[0].shape)
+        # print("pos", np.where(loop_labels==1)[0].shape)
+        return loop_feats, loop_labels, edges_loops, all_loops, loop_acc, np.zeros_like(loop_labels)
 
     def create_multi_loops_sample_cmp(self, phase=None):
 
@@ -1414,8 +1560,6 @@ class Building():
             if flip == True:
                 rot_im = rot_im.transpose(Image.FLIP_LEFT_RIGHT)
             #rot_im = np.transpose(np.array(rot_im)/255.0, (2, 0, 1))
-            print(rot_im.shape)
-            asd
             rot_im = np.array(rot_im)/255.0
 
             grid = np.zeros((128, 128, 128))
@@ -1471,6 +1615,92 @@ class Building():
 
         return loop_feats, loop_labels, edges_loops, all_loops, loop_acc
 
+    def create_loops_sample_feats_imgs(self, phase=None, n_bins=36):
+
+        with np.load('{}/{}_0_False.npz'.format(self.options.predicted_edges_path, self._id)) as data:
+            edges_confidence = data['arr_0']
+            
+        all_loops, loop_labels, edges_loops, loop_acc = self.find_loops(edges_confidence, self.edge_corner, self.corners_det, self.edges_gt, self.corners_det.shape[0])
+        
+        if phase == "train":
+            loop_labels, to_keep = self.filter_loops(edges_loops, loop_labels)
+            all_loops = [x for k, x in enumerate(all_loops) if k in to_keep]
+            edges_loops = edges_loops[to_keep]
+
+        loop_feats = []
+        for k, loop in enumerate(all_loops):
+            rot = 0
+            flip = False
+            if phase == "train":
+                rot = np.random.choice([0, 90, 180, 270])
+                flip = np.random.choice([False, True])
+
+            with np.load('{}/{}_{}_{}.npz'.format(self.options.predicted_edges_path, self._id, rot, flip)) as data:
+                edge_feats = data['arr_1']
+                edge_confs = data['arr_0']
+
+            e_inds = np.where(edges_loops[k]==1)[0]
+
+            # compute bins
+            edges_coords_aug = self.rotate_flip(self.edges_det, rot, flip)
+            one_hot, angles = self.compute_angles(edges_coords_aug)
+
+            # place features in grid
+            rot_rgb = Image.fromarray(self.rgb.copy()).resize((128, 128)).rotate(rot)
+            if flip == True:
+                rot_rgb = rot_rgb.transpose(Image.FLIP_LEFT_RIGHT)
+            rot_rgb = np.array(rot_rgb)/255.0
+            rot_rgb = np.transpose(rot_rgb, (2, 0, 1))
+
+            e_ims = []
+            for e in e_inds:
+                e_im = Image.new("L", (128, 128))
+                draw = ImageDraw.Draw(e_im)
+                y1, x1, y2, x2 = np.array(edges_coords_aug[e])/2.0
+                draw.line((x1, y1, x2, y2), width=2, fill='white')
+                e_im = np.array(e_im)[np.newaxis, :, :]
+                im_feat = np.concatenate([e_im, rot_rgb], 0)
+                e_ims.append(im_feat)
+                # import matplotlib.pyplot as plt
+                # plt.imshow(e_im)
+                # plt.show()
+            e_ims = np.stack(e_ims)
+            # debug_arr = np.sum(grid, 0)
+            # inds = np.where(debug_arr!=0)
+            # debug_arr[inds] = 255.0
+            # print(loop_labels[k])
+            # debug_im = Image.fromarray(debug_arr)
+            # debug_im = Image.fromarray((rot_im[0, :, :]*255).astype("int32"))
+            # import matplotlib.pyplot as plt
+            # plt.imshow(debug_im)
+            # plt.show()
+
+            loop_feats.append(e_ims)
+        loop_feats = np.stack(loop_feats)
+
+        if phase == "train":
+
+            # balance samples
+            pos_inds = np.where(loop_labels==1)[0]
+            neg_inds = np.where(loop_labels==0)[0]
+            num_pos = pos_inds.shape[0]
+            num_neg = neg_inds.shape[0]
+            np.random.shuffle(neg_inds)
+            np.random.shuffle(pos_inds)
+
+            if num_pos < num_neg:
+                neg_inds = neg_inds[:max(1, 5*num_pos)]  
+            else:
+                pos_inds = pos_inds[:max(1, num_neg//5)]  
+
+            loop_feats = np.concatenate([loop_feats[pos_inds, :, :, :], loop_feats[neg_inds, :, :, :]])
+            loop_labels = np.concatenate([loop_labels[pos_inds], loop_labels[neg_inds]])
+
+        # print("neg", np.where(loop_labels==0)[0].shape)
+        # print("pos", np.where(loop_labels==1)[0].shape)
+
+        return loop_feats, loop_labels, edges_loops, all_loops, loop_acc, np.zeros_like(edges_loops)
+
     def create_loops_sample_cmp(self, phase=None, n_bins=36):
 
         with np.load('{}/{}_0_False.npz'.format(self.options.predicted_edges_path, self._id)) as data:
@@ -1503,7 +1733,6 @@ class Building():
             e_inds = np.where(edges_loops[k]==1)[0]
             e_xys = e_xys_dict["{}_{}".format(rot, flip)]
 
-
             # compute bins
             edges_coords_aug = self.rotate_flip(self.edges_det, rot, flip)
             one_hot, angles = self.compute_angles(edges_coords_aug)
@@ -1517,7 +1746,9 @@ class Building():
             rot_im = np.array(rot_im)[np.newaxis, :, :]/255.0
             rot_rgb = np.array(rot_rgb)/255.0
             rot_rgb = np.transpose(rot_rgb, (2, 0, 1))
-            grid = np.zeros((128+n_bins, 128, 128))
+            grid = np.zeros((129, 128, 128))
+
+            #im_loop = draw_edges(edges_loops[k], np.array(edges_coords_aug).astype(np.int32))
 
             for e in e_inds:
                 xs_inds = np.array(np.where(e_xys[e, 0, :]>=0)[0])
@@ -1527,13 +1758,21 @@ class Building():
                     xs = e_xys[e, 0, xs_inds]
                     ys = e_xys[e, 1, ys_inds]
 
-                    feat_in = np.concatenate([edge_feats[e, :], one_hot[e, :]])
+                    feat_in = np.concatenate([edge_feats[e, :], [angles[e]/180.0]], 0)
+
                     feat_in = feat_in[:, np.newaxis]
                     feat_in = np.repeat(feat_in, xs_inds.shape[0], axis=1)
 
                     #feat_in = edge_confs[e]
-                    grid[:, xs, ys] += feat_in
+                    grid[:, xs, ys] = feat_in
 
+            # print(angles[e_inds])
+            # import matplotlib.pyplot as plt
+            # plt.figure()
+            # plt.imshow(np.array(im_loop) * 255)
+            # plt.show()
+
+            # print(angles[e_inds])
             # debug_arr = np.sum(grid, 0)
             # inds = np.where(debug_arr!=0)
             # debug_arr[inds] = 255.0
@@ -1543,7 +1782,18 @@ class Building():
             # import matplotlib.pyplot as plt
             # plt.imshow(debug_im)
             # plt.show()
-            grid = np.concatenate([grid, rot_rgb, rot_im], 0)
+
+            # drop edge features
+            drop = np.random.choice([True, False])
+            if (drop == True) and (phase == "train"):
+                grid[:128, :, :] = 0.0
+
+            drop = np.random.choice([True, False])
+            if (drop == True) and (phase == "train"):
+                rot_rgb[:, :, :] = 0.0
+
+            grid = np.concatenate([grid, rot_rgb], 0)
+
             loop_feats.append(grid)
         loop_feats = np.stack(loop_feats)
 
@@ -1568,15 +1818,13 @@ class Building():
         # print("neg", np.where(loop_labels==0)[0].shape)
         # print("pos", np.where(loop_labels==1)[0].shape)
 
-        return loop_feats, loop_labels, edges_loops, all_loops, loop_acc
+        return loop_feats, loop_labels, edges_loops, all_loops, loop_acc, np.zeros_like(edges_loops)
 
     def create_loops_sample(self, phase=None):
 
-        # imgs, corners_det, edges_det = self.augment(self.imgs.copy(), self.corners_det, self.edges_det)
-
-        edges_confidence = np.load('{}/{}.npy'.format(self.options.predicted_edges_path, self._id))
-
-
+        with np.load('{}/{}_0_False.npz'.format(self.options.predicted_edges_path, self._id)) as data:
+            edges_confidence = data['arr_0']
+            
         all_loops, loop_labels, edges_loops, loop_acc = self.find_loops(edges_confidence, self.edge_corner, self.corners_det, self.edges_gt, self.corners_det.shape[0])
         if phase == "train":
             #print("WARNING: FILTERING LOOPS!")
@@ -1584,35 +1832,89 @@ class Building():
             all_loops = [x for k, x in enumerate(all_loops) if k in to_keep]
             edges_loops = edges_loops[to_keep]
 
+        e_xys_dict = {}
+        for rot in [0, 90, 180, 270]:
+            for flip in [False, True]:
+                e_xys_dict["{}_{}".format(rot, flip)] = self.compute_edges_map(self.edges_det, rot=rot, flip=flip)
+
         loop_ims = []
+        rgb_imgs = []
         for k, loop in enumerate(all_loops):
             im = draw_edges(edges_loops[k], self.edges_det)
 
             # augmentation
             flip = np.random.choice([False, True])
             rot = np.random.choice([0, 90, 180, 270])
-            rot_loop_im = Image.fromarray(im).rotate(rot)
-            rot_rgb_im = Image.fromarray(self.imgs.copy()).rotate(rot)
+            rot_loop_im = Image.fromarray(im).resize((128, 128)).rotate(rot)
+            rot_rgb_im = Image.fromarray(self.rgb.copy()).resize((128, 128)).rotate(rot)
 
             if flip:
                 rot_loop_im = rot_loop_im.transpose(Image.FLIP_LEFT_RIGHT)
                 rot_rgb_im = rot_rgb_im.transpose(Image.FLIP_LEFT_RIGHT)
 
-            # import matplotlib.pyplot as plt
-            # plt.figure()
-            # plt.imshow(np.array(rot_loop_im) * 255)
-            # plt.figure()
-            # plt.imshow(rot_rgb_im)
-            # plt.show()
+            # compute bins
+            edges_coords_aug = self.rotate_flip(self.edges_det, rot, flip)
+            one_hot, angles = self.compute_angles(edges_coords_aug)
+            e_xys = e_xys_dict["{}_{}".format(rot, flip)]
+
+            e_inds = np.where(edges_loops[k]==1)[0]
+            grid = np.zeros((1, 128, 128))
+            for e in e_inds:
+                xs_inds = np.array(np.where(e_xys[e, 0, :]>=0)[0])
+                ys_inds = np.array(np.where(e_xys[e, 1, :]>=0)[0])
+
+                if xs_inds.shape[0] > 0:
+                    xs = e_xys[e, 0, xs_inds]
+                    ys = e_xys[e, 1, ys_inds]
+                    grid[:, xs, ys] = angles[e]/180.0
 
             rot_loop_im = np.array(rot_loop_im)
             rot_rgb_im = np.array(rot_rgb_im)
 
-            im_in = np.concatenate([rot_loop_im[np.newaxis, :, :], np.transpose(rot_rgb_im/255.0, (2, 0, 1))], axis=0)
-            loop_ims.append(im_in)
-        loop_ims = np.stack(loop_ims)
+            # print(angles[e_inds])
+            # import matplotlib.pyplot as plt
+            # plt.figure()
+            # plt.imshow(np.array(rot_loop_im) * 255)
 
-        return loop_ims, loop_labels, edges_loops, all_loops, loop_acc
+            # debug_arr = np.sum(grid, 0)
+            # inds = np.where(debug_arr!=0)
+            # debug_arr[inds] = 255.0
+            # print(loop_labels[k])
+            # debug_im = Image.fromarray(debug_arr)
+            # debug_im_rgb = Image.fromarray((rot_rgb_im).astype("uint8"))
+            # plt.figure()
+            # plt.imshow(debug_im)
+            # plt.figure()
+            # plt.imshow(debug_im_rgb)
+            # plt.show()
+
+            im_in = np.concatenate([rot_loop_im[np.newaxis, :, :], grid], axis=0)
+            rgb_imgs.append(np.transpose(rot_rgb_im/255.0, (2, 0, 1)))
+            loop_ims.append(im_in)
+
+        loop_ims = np.stack(loop_ims)
+        rgb_imgs = np.stack(rgb_imgs)
+
+        if phase == "train":
+
+            # balance samples
+            pos_inds = np.where(loop_labels==1)[0]
+            neg_inds = np.where(loop_labels==0)[0]
+            num_pos = pos_inds.shape[0]
+            num_neg = neg_inds.shape[0]
+            np.random.shuffle(neg_inds)
+            np.random.shuffle(pos_inds)
+
+            if num_pos < num_neg:
+                neg_inds = neg_inds[:max(1, 5*num_pos)]  
+            else:
+                pos_inds = pos_inds[:max(1, num_neg//5)]  
+
+            loop_ims = np.concatenate([loop_ims[pos_inds, :, :, :], loop_ims[neg_inds, :, :, :]])
+            rgb_imgs = np.concatenate([rgb_imgs[pos_inds, :, :, :], rgb_imgs[neg_inds, :, :, :]])
+            loop_labels = np.concatenate([loop_labels[pos_inds], loop_labels[neg_inds]])
+
+        return loop_ims, loop_labels, edges_loops, all_loops, loop_acc, rgb_imgs
 
     def filter_loops(self, loop_edges, loop_labels):
 
@@ -1665,6 +1967,8 @@ class Building():
         loop_labels = []
         edges_loops = []
         loop_acc = []
+        loops_e_inds = []
+        loops_coords = []
         for accs, loops in all_loops:
             loops = loops.detach().cpu().numpy()
 
@@ -1679,6 +1983,8 @@ class Building():
                 c1 = loop[0]
                 #print(c1)
                 # print(len(list(loop[1:])+[loop[0]]))
+                e_inds_ordered = []
+                corners_ordered = []
                 for c2 in list(loop[1:])+[loop[0]]:
                     # check if is a true edge and get all edges in loop
                     is_true_edge = False
@@ -1686,6 +1992,8 @@ class Building():
                     for k, e in enumerate(edge_corner):
                         if (np.array_equal(np.array([c1, c2]), e) == True) or (np.array_equal(np.array([c2, c1]), e) == True):
                             edges_loop[k] = 1
+                            e_inds_ordered.append(k)
+                            corners_ordered.append(np.array([c1, c2]))
                             # print(np.array([c1, c2]), e)
                             if edges_gt[k] == 1:
                                 is_true_edge = True
@@ -1695,10 +2003,13 @@ class Building():
                     if is_true_edge == False:
                         label = 0
                     c1 = c2
-                    
+                
+                corners_ordered = np.stack(corners_ordered)
+                loops_e_inds.append(e_inds_ordered)
                 edges_loops.append(edges_loop)
                 loop_labels.append(label)
                 loop_acc.append(acc.detach().cpu().numpy())
+                loops_coords.append(corners_ordered)
 
                 # print(np.where(edges_loop>0))
                 # loop_im = draw_edges(edges_loop, self.edges_det)
@@ -1708,8 +2019,9 @@ class Building():
 
         edges_loops = np.stack(edges_loops)
         loop_acc = np.stack(loop_acc)
+        loops_e_inds = np.array(loops_e_inds)
 
-        return loop_corners, np.array(loop_labels), edges_loops, loop_acc
+        return loop_corners, np.array(loop_labels), edges_loops, loop_acc, loops_e_inds, loops_coords
 
     def add_colinear_gt(self):
         dot_product_threshold = np.cos(np.deg2rad(20))        
