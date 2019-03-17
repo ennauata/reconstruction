@@ -253,11 +253,8 @@ class Building():
         """
         #assert(num_edges_source < len(self.predicted_edges))
 
-        if self.with_augmentation:
-            imgs, corners_det, edges_det = self.augment(self.imgs.copy(), self.corners_det, self.edges_det)
-        else:
-            imgs, corners_det, edges_det = self.imgs, self.corners_det, self.edges_det
-            pass
+        imgs, corners_det, edges_det = self.augment(self.imgs.copy(), self.corners_det, self.edges_det)
+
         imgs = imgs.transpose((2, 0, 1)).astype(np.float32) / 255
         
         img_c, corner_masks = self.compute_corner_image(corners_det)
@@ -321,11 +318,7 @@ class Building():
         """
         #assert(num_edges_source < len(self.predicted_edges))
 
-        if self.with_augmentation:
-            imgs, corners_det, edges_det = self.augment(self.imgs.copy(), self.corners_det, self.edges_det)
-        else:
-            imgs, corners_det, edges_det = self.imgs, self.corners_det, self.edges_det
-            pass
+        imgs, corners_det, edges_det = self.augment(self.imgs.copy(), self.corners_det, self.edges_det)
 
         imgs = imgs.transpose((2, 0, 1)).astype(np.float32) / 255
         if load_heatmaps:
@@ -338,7 +331,7 @@ class Building():
                 continue
             edge_images = np.stack(edge_images, axis=0)
             #return [imgs.astype(np.float32), edge_images.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.graph_edge_index, self.graph_edge_attr, self.left_edges.astype(np.int64), self.right_edges.astype(np.int64)]
-            return [imgs.astype(np.float32), corner_masks.astype(np.float32), edge_images.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.corner_edge_pairs, self.edge_corner, self.left_edges.astype(np.int64), self.right_edges.astype(np.int64)]
+            return [imgs.astype(np.float32), corner_masks.astype(np.float32), edge_images.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.corner_edge_pairs, self.edge_corner, self.left_edges.astype(np.int64), self.right_edges.astype(np.int64), self.corners_annot, self.edges_annot]
         else:
             return [imgs.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.graph_edge_index, self.graph_edge_attr]
 
@@ -349,11 +342,7 @@ class Building():
         """
         #assert(num_edges_source < len(self.predicted_edges))
 
-        if self.with_augmentation:
-            imgs, corners_det, edges_det = self.augment(self.imgs.copy(), self.corners_det, self.edges_det)
-        else:
-            imgs, corners_det, edges_det = self.imgs, self.corners_det, self.edges_det
-            pass
+        imgs, corners_det, edges_det = self.augment(self.imgs.copy(), self.corners_det, self.edges_det)
 
         imgs = imgs.transpose((2, 0, 1)).astype(np.float32) / 255
         img_c, corner_masks = self.compute_corner_image(corners_det)
@@ -779,7 +768,11 @@ class Building():
         ys, xs = np.nonzero(imgs.min(-1) < 250)
         vertices = np.array([[xs.min(), ys.min()], [xs.min(), ys.max()], [xs.max(), ys.min()], [xs.max(), ys.max()]])
         #center = vertices[0] + np.random.random(2) * (vertices[-1] - vertices[0])
-        angle = np.random.random() * 360
+        if self.with_augmentation:
+            angle = np.random.random() * 360
+        else:
+            angle = 0
+            pass
         #rotation_matrix = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
         #print('vertices', tuple(((vertices[0] + vertices[-1]) / 2).tolist()))
         #rotation_matrix = cv2.getRotationMatrix2D(tuple(((vertices[0] + vertices[-1]) / 2).tolist()), angle, 1)
@@ -788,9 +781,20 @@ class Building():
         mins = transformed_vertices.min(0)
         maxs = transformed_vertices.max(0)
         max_range = (maxs - mins).max()
-        new_size = min(max_range, size) + max(size - max_range, 0) * np.random.random()
+        if self.with_augmentation:
+            #new_size = min(max_range, size) + max(size - max_range, 0) * np.random.random()
+            new_size = size
+        else:
+            #new_size = max_range
+            new_size = size
+            pass
         scale = float(new_size) / max_range
-        offset = (np.random.random(2) * 2 - 1) * (size - (maxs - mins) * scale) / 2 + (size / 2 - (maxs + mins) / 2 * scale)
+        if self.with_augmentation:
+            offset = (np.random.random(2) * 2 - 1) * (size - (maxs - mins) * scale) / 2 + (size / 2 - (maxs + mins) / 2 * scale)
+        else:
+            offset = (size / 2 - (maxs + mins) / 2 * scale)
+            #offset = np.zeros(2)
+            pass
         #offset = 0 * (size - (maxs - mins) * scale) + (size / 2 - (maxs + mins) / 2 * scale)
         translation_matrix = np.array([[scale, 0, offset[0]], [0, scale, offset[1]]])
         transformation_matrix = np.matmul(translation_matrix, np.concatenate([rotation_matrix, np.array([[0, 0, 1]])], axis=0))

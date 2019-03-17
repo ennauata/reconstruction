@@ -23,8 +23,7 @@ from tqdm import tqdm
 from utils.utils import tileImages
 from validator import Validator
 from options import parse_args
-from model.edge import LoopModel
-from model.modules import findLoopsModule
+from model.vae import VAE, loss_function
 
 def main(options):
     ##############################################################################################################
@@ -36,7 +35,7 @@ def main(options):
     # all_loops = findLoopsModule(edge_pred, edge_corner, num_corners, max_num_loop_corners=12, corners=corners, disable_colinear=True, disable_intersection=True)
     # exit(1)
     
-    model = LoopModel(options)
+    model = VAE(4, 1, 64, 64, 1024)
     model = model.cuda()
     model = model.train()
 
@@ -86,7 +85,7 @@ def main(options):
             optimizer.load_state_dict(torch.load('checkpoint/batch_annots_only/' + str(num_edges) + '_optim.pth'))
             pass        
         elif options.restore == 4:
-            state_dict = torch.load(options.checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth')
+            state_dict = torch.load(options.checkpoint_dir.replace('_' + options.suffix, '') + '/' + str(num_edges) + '_checkpoint.pth')
             state = model.state_dict()
             new_state_dict = {k: v for k, v in state_dict.items() if k in state and state[k].shape == v.shape}
             state.update(new_state_dict)
@@ -160,40 +159,9 @@ def main(options):
 
                 #images = torch.cat([im_arr.unsqueeze(0).repeat((len(edge_images), 1, 1, 1)), edge_images.unsqueeze(1)], dim=1)
                 images = im_arr.unsqueeze(0)
-                edge_image_pred, results = model(images, corners, edges, corner_edge_pairs, edge_corner)
-                losses = []
-                edge_image_gt = edge_images[edge_gt > 0.5].max(0, keepdim=True)[0].unsqueeze(0)
-                losses.append(F.binary_cross_entropy(edge_image_pred, edge_image_gt))
-                
-                loop_gts = []
-                multi_loop_gts = []                
-                
-                for index, result in enumerate(results):
-                    edge_pred = result[0]
-                    edge_loss = F.binary_cross_entropy(edge_pred, edge_gt)                    
-                    losses.append(edge_loss)
-
-                    loop_pred = result[1]
-                    loop_edge = result[2]
-                    loop_gt = ((loop_edge * edge_gt).sum(-1) == loop_edge.sum(-1)).float()
-                    losses.append(F.binary_cross_entropy(loop_pred, loop_gt))
-                    loop_gts.append(loop_gt)
-
-                    multi_loop_pred = result[3]
-                    multi_loop_edge = result[4]
-                    multi_loop_gt = ((multi_loop_edge * edge_gt).sum(-1) == multi_loop_edge.sum(-1)).float()
-                    # if multi_loop_gt.sum() < 0.5:
-                    #     multi_loop_gt = (torch.arange(len(multi_loop_edge)).cuda() == (multi_loop_edge * edge_gt).sum(-1).max(0)[1]).float()
-                    #     pass
-
-                    #losses.append(F.binary_cross_entropy(result[6], multi_loop_gt))                    
-                    # if multi_loop_gt.sum() > 1.5:
-                    #     multi_loop_gt = (torch.arange(len(multi_loop_edge)).cuda() == ((multi_loop_edge * edge_gt).sum(-1) * multi_loop_gt).max(0)[1]).float()
-                    #     pass
-                    losses.append(F.binary_cross_entropy(multi_loop_pred, multi_loop_gt))
-
-                    multi_loop_gts.append(multi_loop_gt)
-                    continue
+                mask_pred, mu, log_var, image_x = model(torch.nn.functional.interpolate(images, size=(128, 128), mode='bilinear'))
+                mask_gt = torch.nn.functional.interpolate(edge_images[edge_gt > 0.5].max(0, keepdim=True)[0].unsqueeze(1), size=(128, 128), mode='bilinear')
+                losses = [loss_function(mask_pred, mask_gt, mu, log_var)]                
                 
                 loss = sum(losses)        
 
@@ -218,62 +186,9 @@ def main(options):
                     building = dset_train.buildings[building_index]
                     #print(building._id)
                     #building.update_edges(edge_pred.detach().cpu().numpy() > 0.5)
-                    for pred_index, result in enumerate(results):
-                        edge_pred = result[0]
-                        images, _ = building.visualize(mode='', edge_state=edge_pred.detach().cpu().numpy() > 0.5)
-                        cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_edge_' + str(pred_index) + '_pred.png', images[0])
-                        continue
-                    #building.update_edges(edge_confidence.detach().cpu().numpy() > 0.5)
-                    images, _ = building.visualize(mode='', edge_state=edge_gt.detach().cpu().numpy() > 0.5, color=[0, 0, 255])
-                    cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_edge_gt.png', images[0])
-                    #images, _ = building.visualize(mode='', edge_state=edge_pred.detach().cpu().numpy() > 0.5, color=[0, 0, 255])
-                    #cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_edge_pred.png', images[0])                    
 
-                    cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_image_gt.png', (edge_image_gt.squeeze().detach().cpu().numpy() * 255).astype(np.uint8))
-                    cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_image_pred.png', (edge_image_pred.squeeze().detach().cpu().numpy() * 255).astype(np.uint8))
-
-                    for pred_index, (result, loop_gt, multi_loop_gt) in enumerate(zip(results, loop_gts, multi_loop_gts)):
-                        loop_pred = result[1]
-                        loop_edge_mask = result[2]                        
-                        multi_loop_pred = result[3]
-                        multi_loop_edge_mask = result[4]
-                        multi_loop_predictions = result[5]
-                        
-                        edge_mask = (loop_edge_mask * loop_pred.view((-1, 1))).max(0)[0]
-                        images, _ = building.visualize(mode='', edge_state=edge_mask.detach().cpu().numpy() > 0.5, color=[0, 255, 0])
-                        cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_loop_' + str(pred_index) + '_pred.png', images[0])
-                        if (pred_index == len(results) - 1) or True:
-                            edge_mask = (loop_edge_mask * loop_gt.view((-1, 1))).max(0)[0]
-                            images, _ = building.visualize(mode='', edge_state=edge_mask.detach().cpu().numpy() > 0.5, color=[0, 128, 0], debug=True)
-                            cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_loop_' + str(pred_index) + '_gt.png', images[0])
-                            if False:
-                                for mask_index, edge_mask in enumerate(loop_edge_mask.detach().cpu().numpy()):
-                                    images, _ = building.visualize(mode='', edge_state=edge_mask > 0.5, color=[0, 128, 0])
-                                    cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_loop_' + str(pred_index) + '_gt_' + str(mask_index) + '.png', images[0])                                
-                                    pass
-                                pass
-                            pass
-                        # edge_mask = (multi_loop_edge_mask * multi_loop_pred.view((-1, 1))).max(0)[0]
-                        # images, _ = building.visualize(mode='', edge_state=edge_mask.detach().cpu().numpy() > 0.5, color=[0, 255, 255])
-                        # cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_multi_loop_' + str(pred_index) + '_pred.png', images[0])
-                        for index, multi_loop_index in enumerate(multi_loop_predictions.detach().cpu().numpy()):
-                            edge_mask = multi_loop_edge_mask[multi_loop_index]
-                            images, _ = building.visualize(mode='', edge_state=edge_mask.detach().cpu().numpy() > 0.5, color=[0, 0, 128])
-                            cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_multi_loop_' + str(pred_index) + '_pred_' + str(index) + '.png', images[0])
-                            continue
-                        
-                        if (pred_index == len(results) - 1) or True:
-                            edge_mask = (multi_loop_edge_mask * multi_loop_gt.view((-1, 1))).max(0)[0]
-                            images, _ = building.visualize(mode='', edge_state=edge_mask.detach().cpu().numpy() > 0.5, color=[0, 128, 128])
-                            cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_multi_loop_' + str(pred_index) + '_gt.png', images[0])
-                            pass                        
-                        continue
-                    # exit(1)
-                    # loop_corners = [loop.detach().cpu().numpy() for loop in loop_corners]
-                    # image = building.visualizeLoops(loop_corners, loop_pred.detach().cpu().numpy() > 0.5)
-                    # cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_loop_pred.png', image)
-                    # image = building.visualizeLoops(loop_corners, loop_gt.detach().cpu().numpy() > 0.5)
-                    # cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_loop_gt.png', image)
+                    cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_mask_gt.png', (mask_gt.squeeze().detach().cpu().numpy() * 255).astype(np.uint8))
+                    cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_mask_pred.png', (mask_pred.squeeze().detach().cpu().numpy() * 255).astype(np.uint8))                    
                     pass
                 continue
 
@@ -310,39 +225,10 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
         im_arr, corner_images, edge_images, corners, edges, corner_gt, edge_gt, corner_edge_pairs, edge_corner, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(), sample[9].cuda().squeeze(), sample[10].cuda().squeeze(), sample[11].squeeze().item()
 
         images = im_arr.unsqueeze(0)
-        edge_image_pred, results = model(images, corners, edges, corner_edge_pairs, edge_corner)
-        losses = []
-        edge_image_gt = edge_images[edge_gt > 0.5].max(0, keepdim=True)[0].unsqueeze(0)        
-        losses.append(F.binary_cross_entropy(edge_image_pred, edge_image_gt))
-
-        loop_gts = []
-        multi_loop_gts = []                
-
-        for index, result in enumerate(results):
-            edge_pred = result[0]
-            edge_loss = F.binary_cross_entropy(edge_pred, edge_gt)                    
-            losses.append(edge_loss)
-
-            loop_pred = result[1]
-            loop_edge = result[2]
-            loop_gt = ((loop_edge * edge_gt).sum(-1) == loop_edge.sum(-1)).float()
-            losses.append(F.binary_cross_entropy(loop_pred, loop_gt))
-            loop_gts.append(loop_gt)
-
-            multi_loop_pred = result[3]
-            multi_loop_edge = result[4]
-            multi_loop_gt = ((multi_loop_edge * edge_gt).sum(-1) == multi_loop_edge.sum(-1)).float()
-            # if multi_loop_gt.sum() < 0.5:
-            #     multi_loop_gt = (torch.arange(len(multi_loop_edge)).cuda() == (multi_loop_edge * edge_gt).sum(-1).max(0)[1]).float()
-            #     pass
-            # if multi_loop_gt.sum() > 1.5:
-            #     multi_loop_gt = (torch.arange(len(multi_loop_edge)).cuda() == ((multi_loop_edge * edge_gt).sum(-1) * multi_loop_gt).max(0)[1]).float()
-            #     pass
-            
-            losses.append(F.binary_cross_entropy(multi_loop_pred, multi_loop_gt))
-            multi_loop_gts.append(multi_loop_gt)
-            continue
-
+        mask_pred, mu, log_var, image_x = model(torch.nn.functional.interpolate(images, size=(128, 128), mode='bilinear'))
+        mask_gt = torch.nn.functional.interpolate(edge_images[edge_gt > 0.5].max(0, keepdim=True)[0].unsqueeze(1), size=(128, 128), mode='bilinear')
+        losses = [loss_function(mask_pred, mask_gt, mu, log_var)]
+        
         loss = sum(losses)        
 
         loss_values = [l.data.item() for l in losses]
@@ -377,84 +263,8 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
             building = dataset.buildings[building_index]
             #print(building._id)            
             #building.update_edges(edge_pred.detach().cpu().numpy() > 0.5)
-            for pred_index, result in enumerate(results):
-                edge_pred = result[0]
-                images, _ = building.visualize(mode='', edge_state=edge_pred.detach().cpu().numpy() > 0.5)
-                if sample_index % 500 < 16:
-                    cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_edge_' + str(pred_index) + '_pred.png', images[0])
-                    pass
-                row_images.append(images[0])                
-                continue
-            #building.update_edges(edge_confidence.detach().cpu().numpy() > 0.5)
-            for pred_index, (result, loop_gt, multi_loop_gt) in enumerate(zip(results, loop_gts, multi_loop_gts)):
-                loop_pred = result[1]
-                loop_edge_mask = result[2]                        
-                multi_loop_pred = result[3]
-                multi_loop_edge_mask = result[4]
-                multi_loop_predictions = result[5]
-            
-                edge_mask = (loop_edge_mask * loop_pred.view((-1, 1))).max(0)[0]
-                images, _ = building.visualize(mode='', edge_state=edge_mask.detach().cpu().numpy() > 0.5, color=[0, 255, 0])
-                if sample_index % 500 < 16:
-                    cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_loop_' + str(pred_index) + '_pred.png', images[0])
-                    pass
-                row_images.append(images[0])                
-                if (pred_index == len(results) - 1) or True:
-                    edge_mask = (loop_edge_mask * loop_gt.view((-1, 1))).max(0)[0]
-                    images, _ = building.visualize(mode='', edge_state=edge_mask.detach().cpu().numpy() > 0.5, color=[0, 128, 0], debug=True)
-                    if sample_index % 500 < 16:
-                        cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_loop_' + str(pred_index) + '_gt.png', images[0])
-                        pass
-                    if pred_index == len(results) - 1:
-                        row_images.append(images[0])
-                        pass
-                    
-                    if index_offset == 14 and False:
-                        #print(torch.cat([torch.stack([edge_pred, edge_gt], dim=-1), edge_corner.float()], dim=-1))                        
-                        order = torch.sort(loop_pred, descending=True)[1]
-                        for mask_index, edge_mask in enumerate(loop_edge_mask[order].detach().cpu().numpy()):
-                            print(mask_index, loop_pred[order[mask_index]])
-                            images, _ = building.visualize(mode='', edge_state=edge_mask > 0.5, color=[0, 128, 0])
-                            cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_loop_' + str(pred_index) + '_gt_' + str(mask_index) + '.png', images[0])                                
-                            pass                            
-                        for mask_index, edge_mask in enumerate(multi_loop_edge_mask.detach().cpu().numpy()):
-                            images, _ = building.visualize(mode='', edge_state=edge_mask > 0.5, color=[0, 128, 0])
-                            cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_multi_loop_' + str(pred_index) + '_gt_' + str(mask_index) + '.png', images[0])                                
-                            pass
-                        exit(1)
-                        pass                    
-                    pass
-                for index, multi_loop_index in enumerate(multi_loop_predictions.detach().cpu().numpy()):
-                    edge_mask = multi_loop_edge_mask[multi_loop_index]
-                    images, _ = building.visualize(mode='', edge_state=edge_mask.detach().cpu().numpy() > 0.5, color=[0, 0, 128])
-                    if sample_index % 500 < 16:                
-                        cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_multi_loop_' + str(pred_index) + '_pred_' + str(index) + '.png', images[0])
-                        pass
-                    row_images.append(images[0])
-                    continue
-                # if (pred_index == len(results) - 1) or True:
-                #     edge_mask = (multi_loop_edge_mask * multi_loop_gt.view((-1, 1))).max(0)[0]
-                #     images, _ = building.visualize(mode='', edge_state=edge_mask.detach().cpu().numpy() > 0.5, color=[0, 128, 128])
-                #     if sample_index % 500 < 16:                
-                #         cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_multi_loop_' + str(pred_index) + '_gt.png', images[0])
-                #         pass
-                #     pass                        
-                #     if pred_index == len(results) - 1:
-                #         row_images.append(images[0])
-                #         pass
-                #     pass
-                continue
-
-            images, _ = building.visualize(mode='', edge_state=edge_gt.detach().cpu().numpy() > 0.5, color=[0, 0, 255])
-            row_images.append(images[0])            
-            if sample_index % 500 < 16:
-                cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_edge_gt.png', images[0])
-                cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_image_gt.png', (edge_image_gt.squeeze().detach().cpu().numpy() * 255).astype(np.uint8))
-                cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_image_pred.png', (edge_image_pred.squeeze().detach().cpu().numpy() * 255).astype(np.uint8))
-                pass
-            
-            all_images.append(row_images)
-            row_images = []
+            cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_mask_gt.png', (mask_gt.squeeze().detach().cpu().numpy() * 255).astype(np.uint8))
+            cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_mask_pred.png', (mask_pred.squeeze().detach().cpu().numpy() * 255).astype(np.uint8))                                
             pass
         continue
     
@@ -501,7 +311,7 @@ def visualizeExample(options, im, label_pred, label_gt, confidence=1, prefix='',
 
 if __name__ == '__main__':
     args = parse_args()
-    args.keyname = 'edge'
+    args.keyname = 'vae'
     args.keyname += '_' + args.corner_type
     if args.suffix != '':
         args.keyname += '_' + args.suffix
