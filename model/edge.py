@@ -524,6 +524,9 @@ class NonLocalEncoder(nn.Module):
             num_sharing_channels = 256 * 3
             if '1d' in options.suffix:
                 num_sharing_channels += 256
+                kernel_size = 5
+                self.padding = nn.ReflectionPad1d((kernel_size - 1) // 2)
+                self.edge_conv_1d = nn.Sequential(self.padding, nn.Conv1d(256, 256, kernel_size=kernel_size), nn.ReLU(inplace=True), self.padding, nn.Conv1d(256, 256, kernel_size=kernel_size), nn.ReLU(inplace=True))
                 pass
             if 'noimage' not in options.suffix:
                 num_sharing_channels += 1024
@@ -590,7 +593,7 @@ class NonLocalEncoder(nn.Module):
                     edge_count = torch.zeros(len(edge_x)).cuda()
                     loop_x_1d = []
                     for loop_index, edge_indices in loop_edge_indices:
-                        loop_edge_features = self.edge_1d(edge_x_info[edge_indices].transpose(0, 1).unsqueeze(0)).squeeze(0).transpose(0, 1)
+                        loop_edge_features = self.edge_conv_1d(edge_x_info[edge_indices].transpose(0, 1).unsqueeze(0)).squeeze(0).transpose(0, 1)
                         edge_x_1d.index_add_(0, edge_indices, loop_edge_features)
                         edge_count.index_add_(0, edge_indices, torch.ones(len(edge_indices)).cuda())
                         loop_x_1d.append(loop_edge_features.max(0)[0])
@@ -1124,7 +1127,10 @@ class NonLocalModelImage(nn.Module):
             edge_conflict_mask = compute_edge_conflict_mask(all_edges.view((-1, 2, 2))).float()
             loop_conflict_mask = compute_loop_conflict_mask(loop_edge_masks, loop_masks, all_corners, edge_corner, edge_pred).float()
             #results += self.nonlocal_encoder(edge_features, loop_features, image_x, loop_edge_masks, edge_conflict_mask, loop_conflict_mask)
-            results = self.nonlocal_encoder(edge_features, loop_features, image_x, loop_edge_masks, edge_conflict_mask, loop_conflict_mask, loop_masks)
+            edge_directions = all_edges[:, :2] - all_edges[:, 2:]
+            edge_lengths = torch.norm(edge_directions, dim=-1, keepdim=True)
+            edge_info = torch.cat([edge_directions / torch.clamp(edge_lengths, min=1e-4), edge_lengths], dim=-1)
+            results = self.nonlocal_encoder(edge_features, loop_features, image_x, loop_edge_masks, edge_conflict_mask, loop_conflict_mask, loop_masks, loop_edge_indices, edge_info)
             results[0] += [edge_mask_pred, loop_mask_pred]
             pass
         #results = [result + [loop_masks] for result in results]
