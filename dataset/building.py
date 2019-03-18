@@ -255,7 +255,10 @@ class Building():
         self.corners_annot = corners_annot
         self.edges_annot = edges_annot
 
-        self.add_colinear_gt()
+        print(self.edges_gt)
+        self.add_colinear_edges(self.edges_gt)
+        print(self.edges_gt)
+        exit(1)
         
         if options.suffix != '':
             suffix = '_' + corner_type + '_' + options.suffix
@@ -2017,22 +2020,21 @@ class Building():
 
         return loop_corners, np.array(loop_labels), edges_loops, loop_acc, loops_e_inds, loops_coords
 
-    def add_colinear_gt(self):
+    def add_colinear_edges(self, edge_state):
         dot_product_threshold = np.cos(np.deg2rad(20))        
         directions = (self.edges_det[:, 2:4] - self.edges_det[:, :2]).astype(np.float32)
         directions = directions / np.maximum(np.linalg.norm(directions, axis=-1, keepdims=True), 1e-4)
-        new_edge_corner_annots = []
         while True:
             has_change = False
-            for edge_index_1, edge_gt_1 in enumerate(self.edges_gt):
+            for edge_index_1, edge_gt_1 in enumerate(edge_state):
                 if edge_gt_1 < 0.5:
                     continue
-                for edge_index_2, edge_gt_2 in enumerate(self.edges_gt):
+                for edge_index_2, edge_gt_2 in enumerate(edge_state):
                     if edge_index_2 <= edge_index_1 or edge_gt_2 < 0.5:
                         continue
                     if (np.expand_dims(self.edge_corner[edge_index_2], axis=-1) == self.edge_corner[edge_index_1]).max() < 0.5:
                         continue
-                    corner_count = np.zeros(len(self.edges_gt))
+                    corner_count = np.zeros(len(edge_state))
                     np.add.at(corner_count, self.edge_corner[edge_index_1], 1)
                     np.add.at(corner_count, self.edge_corner[edge_index_2], 1)
                     corner_pair = (corner_count == 1).nonzero()[0]
@@ -2041,10 +2043,10 @@ class Building():
                     if len(other_edge_index) == 0:
                         continue
                     other_edge_index = other_edge_index[0]
-                    if self.edges_gt[other_edge_index] > 0.5:
+                    if edge_state[other_edge_index] > 0.5:
                         continue
                     if np.abs(np.dot(directions[edge_index_1], directions[edge_index_2])) > dot_product_threshold:
-                        self.edges_gt[other_edge_index] = 1
+                        edge_state[other_edge_index] = 1
                         #print(self.edge_corner[edge_index_1], self.edge_corner[edge_index_2])
                         has_change = True
                         pass
@@ -2057,6 +2059,7 @@ class Building():
 
 
     def post_process(self, edge_state):
+        self.add_colinear_edges(edge_state)
         dot_product_threshold = np.cos(np.deg2rad(20))    
         distance_threshold = 0.02
 

@@ -526,7 +526,7 @@ class NonLocalEncoder(nn.Module):
                 num_sharing_channels += 256
                 kernel_size = 5
                 self.padding = nn.ReflectionPad1d((kernel_size - 1) // 2)
-                self.edge_conv_1d = nn.Sequential(self.padding, nn.Conv1d(256, 256, kernel_size=kernel_size), nn.ReLU(inplace=True), self.padding, nn.Conv1d(256, 256, kernel_size=kernel_size), nn.ReLU(inplace=True))
+                self.edge_conv_1d = nn.Sequential(self.padding, nn.Conv1d(256 + 3, 256, kernel_size=kernel_size), nn.ReLU(inplace=True), self.padding, nn.Conv1d(256, 256, kernel_size=kernel_size), nn.ReLU(inplace=True))
                 pass
             if 'noimage' not in options.suffix:
                 num_sharing_channels += 1024
@@ -588,17 +588,17 @@ class NonLocalEncoder(nn.Module):
                 edge_xs = [edge_x, edge_x_from_loop, edge_x_from_conflict]
                 loop_xs = [loop_x, loop_x_from_edge, loop_x_from_conflict]
                 if '1d' in self.options.suffix:
-                    edge_x_info = torch.cat([edge_x, edge_inf], dim=-1)
+                    edge_x_info = torch.cat([edge_x, edge_info], dim=-1)
                     edge_x_1d = torch.zeros(edge_x.shape).cuda()
                     edge_count = torch.zeros(len(edge_x)).cuda()
                     loop_x_1d = []
-                    for loop_index, edge_indices in loop_edge_indices:
+                    for loop_index, edge_indices in enumerate(loop_edge_indices):
                         loop_edge_features = self.edge_conv_1d(edge_x_info[edge_indices].transpose(0, 1).unsqueeze(0)).squeeze(0).transpose(0, 1)
                         edge_x_1d.index_add_(0, edge_indices, loop_edge_features)
                         edge_count.index_add_(0, edge_indices, torch.ones(len(edge_indices)).cuda())
                         loop_x_1d.append(loop_edge_features.max(0)[0])
                         continue
-                    edge_x_1d = edge_x_1d / edge_count.unsqueeze(-1)
+                    edge_x_1d = edge_x_1d / torch.clamp(edge_count.unsqueeze(-1), 1e-4)
                     loop_x_1d = torch.stack(loop_x_1d, dim=0)
                     edge_xs.append(edge_x_1d)
                     loop_xs.append(loop_x_1d)

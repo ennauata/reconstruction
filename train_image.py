@@ -440,6 +440,7 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                          if sample_index % 500 < 16:
                              print(building._id, statistics)                             
                              cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_multi_loop_' + str(pred_index) + '_pred.png', images[0])
+                             exit(1)
                              pass
                          row_images.append(images[0])
                          

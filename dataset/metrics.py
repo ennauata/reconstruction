@@ -199,7 +199,7 @@ class Metrics():
         self.curr_loop_fp += per_sample_loop_fp
         self.n_loop_samples += len(annot_rs)
         self.per_loop_sample_score.update({building._id: {'recall': per_sample_loop_tp/len(annot_rs), 'precision': per_sample_loop_tp/(per_sample_loop_tp+per_sample_loop_fp+1e-8)}}) 
-        return np.array([self.curr_corner_tp, self.curr_corner_fp, self.n_corner_samples, self.curr_edge_tp, self.curr_edge_fp, self.n_edge_samples, self.curr_loop_tp, self.curr_loop_fp, self.n_loop_samples])
+        return np.array([self.curr_corner_tp, self.curr_corner_fp, gts.shape[0], self.curr_edge_tp, self.curr_edge_fp, building.edge_corner_annots.shape[0], self.curr_loop_tp, self.curr_loop_fp, len(annot_rs)])
 
 def extract_regions(region_mask):
     inds = np.where((region_mask > 1) & (region_mask < 255))
