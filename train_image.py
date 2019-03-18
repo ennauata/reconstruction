@@ -164,7 +164,8 @@ def main(options):
             for sample_index, sample in enumerate(data_iterator):
 
                 im_arr, corner_images, edge_images, corners, edges, corner_gt, edge_gt, corner_edge_pairs, edge_corner, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(), sample[9].cuda().squeeze(), sample[10].cuda().squeeze(), sample[11].squeeze().item()
-
+                if len(edge_images) > 200:
+                    continue
                 #print(dset_train.buildings[building_index]._id)
                 #print('num edges', len(edge_gt))
 
@@ -174,7 +175,9 @@ def main(options):
 
                 losses = []
                 edge_image_gt = torch.nn.functional.interpolate(edge_images[edge_gt > 0.5].max(0, keepdim=True)[0].unsqueeze(0), (128, 128), mode='bilinear')
-                losses.append(F.binary_cross_entropy(edge_image_pred, edge_image_gt))
+                if 'noimage' not in options.suffix:
+                    losses.append(F.binary_cross_entropy(edge_image_pred, edge_image_gt))
+                    pass
                 
                 loop_gts = []
                 for index, result in enumerate(results):
@@ -189,9 +192,11 @@ def main(options):
                         losses.append(F.binary_cross_entropy(loop_pred, loop_gt))
                         loop_gts.append(loop_gt)
 
-                        # loop_min_edge = (loop_edge_mask * edge_pred + (1 - loop_edge_mask)).min(-1)[0]                        
-                        # loop_edge_sum = (loop_edge_mask * edge_pred).sum(-1) - (loop_edge_mask.sum(-1) - 1)
-                        # losses.append(torch.mean(torch.clamp(loop_edge_sum - loop_pred, min=0) + torch.clamp(loop_pred - loop_min_edge, min=0)) * 10)
+                        if 'constraint':
+                            loop_min_edge = (loop_edge_mask * edge_pred + (1 - loop_edge_mask)).min(-1)[0]                        
+                            loop_edge_sum = (loop_edge_mask * edge_pred).sum(-1) - (loop_edge_mask.sum(-1) - 1)
+                            losses.append(torch.mean(torch.clamp(loop_edge_sum - loop_pred, min=0) + torch.clamp(loop_pred - loop_min_edge, min=0)) * 10)
+                            pass
                         pass
                     if len(result) > 4:
                         edge_mask_pred = result[4]
@@ -301,7 +306,7 @@ def main(options):
 
 def testOneEpoch(options, model, dataset, additional_models=[], visualize=False):
     #model.eval()
-    metrics = [Metrics(), Metrics()]
+    metrics = []
     
     epoch_losses = []
     ## Same with train_loader but provide progress bar
@@ -377,9 +382,13 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
         # statistics_per_length[lengths, 3] += np.logical_and(edge_pred < 0.5, edge_gt == 0).sum()
 
         if sample_index % 500 < 16 or visualize:
+            if visualize and len(metrics) == 0:                                
+                for _ in len(results):
+                    metrics.append(Metrics())
+                    continue
+                pass
             index_offset = sample_index % 1000
             building = dataset.buildings[building_index]
-            print(building._id)            
             #building.update_edges(edge_pred.detach().cpu().numpy() > 0.5)
             for pred_index, result in enumerate(results):
                 edge_pred = result[0]
@@ -421,17 +430,18 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
 
                     if visualize:
                          multi_loop_edge_mask, debug_info = findBestMultiLoop(loop_pred, edge_pred, loop_edge_mask, result[3], edge_corner, corners)
-                         images, _ = building.visualize(mode='', edge_state=multi_loop_edge_mask.detach().cpu().numpy() > 0.5, color=[255, 255, 0])
-                         if sample_index % 500 < 16:
-                             cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_multi_loop_' + str(pred_index) + '_pred.png', images[0])
-                             pass
-                         row_images.append(images[0])
+                         # images, _ = building.visualize(mode='', edge_state=multi_loop_edge_mask.detach().cpu().numpy() > 0.5, color=[255, 255, 0])
 
                          building_final = copy.deepcopy(building)
                          building_final.post_process(multi_loop_edge_mask.detach().cpu().numpy() > 0.5)
                          statistics = metrics[pred_index].forward(building_final)
                          images, _ = building_final.visualize(mode='', edge_state=np.ones(len(building_final.edge_corner), dtype=np.bool), color=[255, 255, 0], debug=True)
-                         cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_multi_loop_' + str(pred_index) + '_pred_final.png', images[0])
+                         #cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_multi_loop_' + str(pred_index) + '_pred.png', images[0])
+                         print(building._id, statistics)
+                         if sample_index % 500 < 16:
+                             cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_multi_loop_' + str(pred_index) + '_pred.png', images[0])
+                             pass
+                         row_images.append(images[0])
                          
                          pass
                     
@@ -472,6 +482,8 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
             
             all_images.append(row_images)
             row_images = []
+            if len(all_images) == 20:
+                break
             #exit(1)
             pass
         continue
