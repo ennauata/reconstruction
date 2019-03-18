@@ -32,8 +32,9 @@ def edge_points(UVs, edges, size, distance_threshold=3):
     points = edge_mask.nonzero()
     edge_info = torch.cat([directions, lengths.unsqueeze(-1)], dim=-1)
     point_offsets = torch.min(direction_distances, 1 - direction_distances)
-    #points_info = torch.stack([torch.min(direction_distances, 1 - direction_distances), normal_distances / distance_threshold], dim=-1)
-    points_info = torch.cat([point_offsets.unsqueeze(-1), edge_info.repeat((len(direction_distances), len(direction_distances), 1, 1))], dim=-1)
+    #points_info = torch.stack([point_offsets, normal_distances / distance_threshold], dim=-1)
+    #points_info = torch.cat([point_offsets.unsqueeze(-1), edge_info.repeat((len(direction_distances), len(direction_distances), 1, 1))], dim=-1)
+    points_info = point_offsets.unsqueeze(-1)
     points_info = (points_info * all_edge_mask.float().unsqueeze(-1)).sum(-2) / torch.clamp(all_edge_mask.float().unsqueeze(-1).sum(-2), min=1e-4)
     points_info = points_info[points[:, 0], points[:, 1]]
     return points, points_info
@@ -293,7 +294,7 @@ class SparseEncoderSpatial(nn.Module):
         num_final_channels = m * scales[-1]
         self.sparse_model = scn.Sequential().add(
             scn.InputLayer(dimension, full_scale, mode=4)).add(
-            scn.SubmanifoldConvolution(dimension, num_input_channels + 4, m, 3, False)).add(
+            scn.SubmanifoldConvolution(dimension, num_input_channels + 1, m, 3, False)).add(
             #scn.MaxPooling(dimension, 3, 2)).add(
             scn.SparseResNet(dimension, m, blocks)).add(
             scn.BatchNormReLU(num_final_channels)).add(
@@ -520,17 +521,32 @@ class NonLocalEncoder(nn.Module):
         # self.loop_layer_2 = LinearBlock(256, 64)
 
         if 'sharing' in options.suffix:
-            self.edge_layer_3 = LinearBlock(256 * 3 + 1024, 256)
-            self.loop_layer_3 = LinearBlock(256 * 3 + 1024, 256)
+            num_sharing_channels = 256 * 3
+            if '1d' in options.suffix:
+                num_sharing_channels += 256
+                pass
+            if 'noimage' not in options.suffix:
+                num_sharing_channels += 1024
+                pass
+            self.edge_layer_3 = LinearBlock(num_sharing_channels, 256)
+            self.loop_layer_3 = LinearBlock(num_sharing_channels, 256)
+        elif 'maxpool' in options.suffix:
+            self.edge_layer_3 = LinearBlock(512, 256)
+            self.loop_layer_3 = LinearBlock(512, 256)
         else:
-            self.edge_layer_3 = LinearBlock(512, 64)
-            self.loop_layer_3 = LinearBlock(512, 64)
+            self.edge_edge_sim = LinearBlock(256, 256)
+            self.loop_edge_sim = LinearBlock(256, 256)                                                
+            self.loop_loop_sim = LinearBlock(256, 256)            
+            self.edge_loop_sim = LinearBlock(256, 256)
+            
+            self.edge_layer_3 = LinearBlock(256 * 3 + 1024, 256)
+            self.loop_layer_3 = LinearBlock(256 * 3 + 1024, 256)            
             pass
         self.edge_pred = nn.Sequential(LinearBlock(256, 64), nn.Linear(64, 1))
         self.loop_pred = nn.Sequential(LinearBlock(256, 64), nn.Linear(64, 1))
         return
     
-    def forward(self, edge_x, loop_x, image_x, loop_edge_masks, edge_conflict_mask, loop_conflict_mask, loop_masks):
+    def forward(self, edge_x, loop_x, image_x, loop_edge_masks, edge_conflict_mask, loop_conflict_mask, loop_masks, loop_edge_indices, edge_info):
         results = []
         
         # edge_x = self.edge_layer_1(edge_x)
@@ -542,20 +558,57 @@ class NonLocalEncoder(nn.Module):
             loop_x = torch.cat([loop_x, loop_x.max(0, keepdim=True)[0].repeat((len(loop_x), 1))], dim=-1)
             edge_x = self.edge_layer_3(edge_x)                        
             loop_x = self.loop_layer_3(loop_x)
-        elif 'sharing' in self.options.suffix:
-            edge_pred = torch.sigmoid(self.edge_pred(edge_x)).view(-1)
-            loop_pred = torch.sigmoid(self.loop_pred(loop_x)).view(-1)
-            results.append([edge_pred, loop_pred, loop_edge_masks, loop_masks])
-            weights = loop_edge_masks * torch.abs(loop_pred.unsqueeze(-1) - edge_pred)
-            #weights = loop_edge_masks * loop_pred.unsqueeze(-1)
-            edge_x_from_loop = (loop_x.unsqueeze(1) * weights.unsqueeze(-1)).sum(0) / torch.clamp(weights.sum(0).unsqueeze(-1), min=1e-4)
-            loop_x_from_edge = (edge_x * weights.unsqueeze(-1)).sum(1) / torch.clamp(weights.sum(-1).unsqueeze(-1), min=1e-4)
-            edge_x_from_conflict = (edge_conflict_mask.unsqueeze(-1) * edge_x).max(1)[0]
-            loop_x_from_conflict = (loop_conflict_mask.unsqueeze(-1) * loop_x).max(1)[0]
-            edge_x = torch.cat([edge_x, edge_x_from_loop, edge_x_from_conflict, image_x.repeat((len(edge_x), 1))], dim=-1)
-            loop_x = torch.cat([loop_x, loop_x_from_edge, loop_x_from_conflict, image_x.repeat((len(loop_x), 1))], dim=-1)
+        elif 'fully' in self.options.suffix:
+            edge_edge_sim = self.edge_edge_sim(edge_x)
+            edge_edge_sim = (edge_edge_sim.unsqueeze(1) * edge_edge_sim).mean(-1)
+            loop_loop_sim = self.loop_loop_sim(loop_x)
+            loop_loop_sim = (loop_loop_sim.unsqueeze(1) * loop_loop_sim).mean(-1)
+            edge_loop_sim = self.edge_loop_sim(edge_x)
+            loop_edge_sim = self.loop_edge_sim(loop_x)
+            edge_loop_sim = (edge_loop_sim.unsqueeze(1) * loop_edge_sim).mean(-1)            
+            #loop_edge_sim = (loop_edge_sim.unsqueeze(1) * loop_edge_sim).mean(-1)
+            edge_x, loop_x = torch.cat([edge_x, (edge_x * edge_edge_sim.unsqueeze(-1)).sum(1), (loop_x * edge_loop_sim.unsqueeze(-1)).sum(1), image_x.repeat((len(edge_x), 1))], dim=-1), torch.cat([loop_x, (loop_x * loop_loop_sim.unsqueeze(-1)).sum(1), (edge_x * edge_loop_sim.transpose(0, 1).unsqueeze(-1)).sum(1), image_x.repeat((len(loop_x), 1))], dim=-1)
             edge_x = self.edge_layer_3(edge_x)                        
             loop_x = self.loop_layer_3(loop_x)            
+        elif 'sharing' in self.options.suffix:
+            num_iterations = 2 if 'sharing2' in self.options.suffix else 1
+            for _ in range(num_iterations):
+                edge_pred = torch.sigmoid(self.edge_pred(edge_x)).view(-1)
+                loop_pred = torch.sigmoid(self.loop_pred(loop_x)).view(-1)
+                results.append([edge_pred, loop_pred, loop_edge_masks, loop_masks])
+                weights = loop_edge_masks * torch.abs(loop_pred.unsqueeze(-1) - edge_pred)
+                #weights = loop_edge_masks * loop_pred.unsqueeze(-1)
+                edge_x_from_loop = (loop_x.unsqueeze(1) * weights.unsqueeze(-1)).sum(0) / torch.clamp(weights.sum(0).unsqueeze(-1), min=1e-4)
+                loop_x_from_edge = (edge_x * weights.unsqueeze(-1)).sum(1) / torch.clamp(weights.sum(-1).unsqueeze(-1), min=1e-4)
+                edge_x_from_conflict = (edge_conflict_mask.unsqueeze(-1) * edge_x).max(1)[0]
+                loop_x_from_conflict = (loop_conflict_mask.unsqueeze(-1) * loop_x).max(1)[0]
+                edge_xs = [edge_x, edge_x_from_loop, edge_x_from_conflict]
+                loop_xs = [loop_x, loop_x_from_edge, loop_x_from_conflict]
+                if '1d' in self.options.suffix:
+                    edge_x_info = torch.cat([edge_x, edge_inf], dim=-1)
+                    edge_x_1d = torch.zeros(edge_x.shape).cuda()
+                    edge_count = torch.zeros(len(edge_x)).cuda()
+                    loop_x_1d = []
+                    for loop_index, edge_indices in loop_edge_indices:
+                        loop_edge_features = self.edge_1d(edge_x_info[edge_indices].transpose(0, 1).unsqueeze(0)).squeeze(0).transpose(0, 1)
+                        edge_x_1d.index_add_(0, edge_indices, loop_edge_features)
+                        edge_count.index_add_(0, edge_indices, torch.ones(len(edge_indices)).cuda())
+                        loop_x_1d.append(loop_edge_features.max(0)[0])
+                        continue
+                    edge_x_1d = edge_x_1d / edge_count.unsqueeze(-1)
+                    loop_x_1d = torch.stack(loop_x_1d, dim=0)
+                    edge_xs.append(edge_x_1d)
+                    loop_xs.append(loop_x_1d)
+                    pass
+                if 'noimage' not in self.options.suffix:
+                    edge_xs.append(image_x.repeat((len(edge_x), 1)))
+                    loop_xs.append(image_x.repeat((len(edge_x), 1)))                    
+                    pass
+                edge_x = torch.cat(edge_xs, dim=-1)
+                loop_x = torch.cat(loop_xs, dim=-1)                
+                edge_x = self.edge_layer_3(edge_x)                        
+                loop_x = self.loop_layer_3(loop_x)
+                pass
         else:
             assert(False, 'suffix invalid')
             pass
