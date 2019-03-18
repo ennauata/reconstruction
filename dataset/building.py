@@ -255,10 +255,8 @@ class Building():
         self.corners_annot = corners_annot
         self.edges_annot = edges_annot
 
-        print(self.edges_gt)
         self.add_colinear_edges(self.edges_gt)
-        print(self.edges_gt)
-        exit(1)
+        self.add_colinear_edges_annot()        
         
         if options.suffix != '':
             suffix = '_' + corner_type + '_' + options.suffix
@@ -2057,6 +2055,37 @@ class Building():
             continue
         return
 
+    def add_colinear_edges_annot(self):
+        dot_product_threshold = np.cos(np.deg2rad(20))
+        edge_corner = self.edge_corner_annots
+        edges = np.array(self.corners_annot)[:, :2][edge_corner].reshape((-1, 4))
+        num_edges = len(edges)
+        directions = (edges[:, 2:4] - edges[:, :2]).astype(np.float32)
+        directions = directions / np.maximum(np.linalg.norm(directions, axis=-1, keepdims=True), 1e-4)
+        new_edge_corner = []
+        while True:
+            has_change = False
+            for edge_index_1 in range(num_edges):
+                for edge_index_2 in range(num_edges):
+                    if edge_index_2 <= edge_index_1:
+                        continue
+                    if (np.expand_dims(edge_corner[edge_index_2], axis=-1) == edge_corner[edge_index_1]).max() < 0.5:
+                        continue
+                    if np.abs(np.dot(directions[edge_index_1], directions[edge_index_2])) < dot_product_threshold:
+                        continue
+                    corner_count = np.zeros(num_edges)
+                    np.add.at(corner_count, edge_corner[edge_index_1], 1)
+                    np.add.at(corner_count, edge_corner[edge_index_2], 1)
+                    corner_pair = (corner_count == 1).nonzero()[0]
+                    corner_pair = np.sort(corner_pair)
+                    new_edge_corner.append(corner_pair)
+                    continue
+                continue
+            if not has_change:
+                break
+            continue
+        self.edge_corner_annots = np.concatenate([self.edge_corner_annots, np.stack(new_edge_corner, axis=0)], axis=0)
+        return    
 
     def post_process(self, edge_state):
         self.add_colinear_edges(edge_state)
