@@ -383,7 +383,7 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
 
         if sample_index % 500 < 16 or visualize:
             if visualize and len(metrics) == 0:                                
-                for _ in len(results):
+                for _ in range(len(results)):
                     metrics.append(Metrics())
                     continue
                 pass
@@ -437,8 +437,8 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                          statistics = metrics[pred_index].forward(building_final)
                          images, _ = building_final.visualize(mode='', edge_state=np.ones(len(building_final.edge_corner), dtype=np.bool), color=[255, 255, 0], debug=True)
                          #cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_multi_loop_' + str(pred_index) + '_pred.png', images[0])
-                         print(building._id, statistics)
                          if sample_index % 500 < 16:
+                             print(building._id, statistics)                             
                              cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_multi_loop_' + str(pred_index) + '_pred.png', images[0])
                              pass
                          row_images.append(images[0])
@@ -482,26 +482,24 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
             
             all_images.append(row_images)
             row_images = []
-            if len(all_images) == 20:
-                break
             #exit(1)
             pass
         continue
 
     if visualize:
-        for c in range(2):
-            print(c)
+        for c in range(len(metrics)):
+            print('iteration', c)
             metrics[c].print_metrics()
             continue
     
         if len(row_images) > 0:
             all_images.append(row_images)
             pass        
-        image = tileImages(all_images, background_color=0)
+        image = tileImages(all_images[:20], background_color=0)
         cv2.imwrite(options.test_dir + '/results.png', image)        
         pass
 
-    print('statistics', statistics[0] / (statistics[0] + statistics[1]), statistics[3] / (statistics[2] + statistics[3]), statistics[4] / statistics[5], statistics[5])
+    #print('statistics', statistics[0] / (statistics[0] + statistics[1]), statistics[3] / (statistics[2] + statistics[3]), statistics[4] / statistics[5], statistics[5])
     # for i in range(350):
     #     if (statistics_per_length[i, 0] + statistics_per_length[i, 1] > 0) and (statistics_per_length[i, 2] + statistics_per_length[i, 3] > 0): 
     #         print('{}, {}, {}'.format(i+1, statistics_per_length[i, 0] / (statistics_per_length[i, 0] + statistics_per_length[i, 1] + 1E-10), statistics_per_length[i, 3] / (statistics_per_length[i, 2] + statistics_per_length[i, 3] + 1E-10)))

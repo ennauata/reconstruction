@@ -605,7 +605,7 @@ class NonLocalEncoder(nn.Module):
                     pass
                 if 'noimage' not in self.options.suffix:
                     edge_xs.append(image_x.repeat((len(edge_x), 1)))
-                    loop_xs.append(image_x.repeat((len(edge_x), 1)))                    
+                    loop_xs.append(image_x.repeat((len(loop_x), 1)))                    
                     pass
                 edge_x = torch.cat(edge_xs, dim=-1)
                 loop_x = torch.cat(loop_xs, dim=-1)                

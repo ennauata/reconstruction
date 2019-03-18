@@ -45,17 +45,21 @@ class Metrics():
     def print_metrics(self):
 
         # print scores
+        values = []
         recall, precision = self.calc_corner_metrics()
         f_score = 2.0*precision*recall/(precision+recall+1e-8)
+        values += [recall, precision, f_score]
         print('Overall Scores\n-- corners \nrecall: %.3f\nprecision: %.3f\nf_score: %.3f\n' % (recall, precision, f_score))
 
         # print scores
         recall, precision = self.calc_edge_metrics()
         f_score = 2.0*precision*recall/(precision+recall+1e-8)
+        values += [recall, precision, f_score]        
         print('Overall Scores\n-- edges \nrecall: %.3f\nprecision: %.3f\nf_score: %.3f\n' % (recall, precision, f_score))
 
         recall, precision = self.calc_loop_metrics()
         f_score = 2.0*precision*recall/(precision+recall+1e-8)
+        values += [recall, precision, f_score]
         print('-- loops \nrecall: %.3f\nprecision: %.3f\nf_score: %.3f\n' % (recall, precision, f_score))
 
         # print('Per sample')
@@ -63,6 +67,8 @@ class Metrics():
         #     recall = self.per_sample_score[k]['recall']
         #     precision = self.per_sample_score[k]['precision']
         #     print('id: %s; recall: %.3f; precision: %.3f' % (k, recall, precision))
+        print(' '.join(['%.1f'%(value * 100) for value in values]))
+        
         return 
 
     def reset(self):
@@ -193,8 +199,7 @@ class Metrics():
         self.curr_loop_fp += per_sample_loop_fp
         self.n_loop_samples += len(annot_rs)
         self.per_loop_sample_score.update({building._id: {'recall': per_sample_loop_tp/len(annot_rs), 'precision': per_sample_loop_tp/(per_sample_loop_tp+per_sample_loop_fp+1e-8)}}) 
-
-        return 
+        return np.array([self.curr_corner_tp, self.curr_corner_fp, self.n_corner_samples, self.curr_edge_tp, self.curr_edge_fp, self.n_edge_samples, self.curr_loop_tp, self.curr_loop_fp, self.n_loop_samples])
 
 def extract_regions(region_mask):
     inds = np.where((region_mask > 1) & (region_mask < 255))
