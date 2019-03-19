@@ -2174,6 +2174,15 @@ class Building():
                 continue
             continue
         corner_mapping = np.arange(len(corners), dtype=np.int32)
+        new_corner_index = 0
+        for corner_index in range(len(corners)):
+            if (edge_corner == corner_index).sum() >= 2:
+                corner_mapping[corner_index] = new_corner_index                
+                new_corner_index += 1
+            else:
+                corner_mapping[corner_index] = -1
+                pass
+            continue
         for corner_index_1, corner_1 in enumerate(corners):
             for corner_index_2, corner_2 in enumerate(corners):
                 if corner_index_2 == corner_index_1:
@@ -2183,9 +2192,26 @@ class Building():
                     pass
                 continue
             continue
-        _, corner_indices, corner_mapping = np.unique(corner_mapping, return_index=True, return_inverse=True)
+        corner_indices, corner_mapping = np.unique(corner_mapping, return_inverse=True)
+        new_corners = []
+        new_corner_mapping = corner_mapping
+        new_corner_index = 0
+        for corner_index, ori_corner_index in enumerate(corner_indices):
+            if ori_corner_index < 0:
+                continue
+            mask = corner_mapping == corner_index
+            new_corners.append(corners[mask].mean(0))
+            new_corner_mapping[mask] = new_corner_index
+            new_corner_index += 1
+            continue
+        corners = np.stack(new_corners, axis=0)
+        corner_mapping = new_corner_mapping
         #corners = corners[corner_indices]
         edge_corner = corner_mapping[edge_corner]
+        edge_values = edge_corner.max(-1) * len(corner_indices) + edge_corner.min(-1)
+        _, edge_indices = np.unique(edge_values, return_index=True)
+        edge_corner = edge_corner[edge_indices]
+        edge_corner = edge_corner[edge_corner[:, 0] != edge_corner[:, 1]]
         self.edge_corner = edge_corner
         corners = (corners * 256).astype(np.int32)
         self.corners_det = corners

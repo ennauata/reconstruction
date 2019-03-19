@@ -92,7 +92,7 @@ class Metrics():
         self.per_loop_sample_score = {}
         return
 
-    def forward(self, building, thresh=4.0, iou_thresh=0.8):
+    def forward(self, building, thresh=4.0, iou_thresh=0.7):
 
         ## Compute corners precision/recall
         gts = np.array(building.corners_annot)[:, :2]
@@ -179,14 +179,15 @@ class Metrics():
         for i, r_det in enumerate(pred_rs):
 
             # get closest gt
-            near_gt = [0, 9999999.0, (0.0, 0.0)]
+            near_gt = [0, 0, (0.0, 0.0)]
             for k, r_gt in enumerate(annot_rs):
                 iou = np.logical_and(r_gt, r_det).sum()/np.logical_or(r_gt, r_det).sum()
-                if iou < near_gt[1]:
+                #print(i, k, iou)
+                if iou > near_gt[1]:
                     near_gt = [k, iou, r_gt] 
 
             # hit (<= thresh) and not found yet 
-            if near_gt[1] <= iou_thresh and not found[near_gt[0]]:
+            if near_gt[1] >= iou_thresh and not found[near_gt[0]]:
                 per_sample_loop_tp += 1.0
                 found[near_gt[0]] = True
 
@@ -194,6 +195,16 @@ class Metrics():
             else:
                 per_sample_loop_fp += 1.0
 
+        # import cv2
+        # print(pred_edge_map.shape, pred_edge_map.max())
+        # cv2.imwrite('test/mask.png', (pred_edge_map).astype(np.uint8))
+        # for index, mask in enumerate(pred_rs):
+        #     print(mask.shape, mask.max())
+        #     cv2.imwrite('test/mask_' + str(index) + '.png', (mask * 255).astype(np.uint8))
+        #     continue
+        # exit(1)
+        
+                
         # update counters for corners
         self.curr_loop_tp += per_sample_loop_tp
         self.curr_loop_fp += per_sample_loop_fp
@@ -211,7 +222,9 @@ def extract_regions(region_mask):
             r = np.zeros_like(region_mask)
             inds = np.where(region_mask == t)
             r[inds[1], inds[0]] = 1
-            rs.append(r)
+            if r[0][0] == 0 and r[0][-1] == 0 and r[-1][0] == 0 and r[-1][-1] == 0:
+                rs.append(r)
+                pass
     return rs
 
 def fill_regions(edge_mask):

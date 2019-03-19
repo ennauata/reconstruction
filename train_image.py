@@ -429,7 +429,7 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                         pass
                     row_images.append(images[0])
 
-                    if visualize:
+                    if visualize and (pred_index == len(results) - 1):
                          multi_loop_edge_mask, debug_info = findBestMultiLoop(loop_pred, edge_pred, loop_edge_mask, result[3], edge_corner, corners)
                          # images, _ = building.visualize(mode='', edge_state=multi_loop_edge_mask.detach().cpu().numpy() > 0.5, color=[255, 255, 0])
 
@@ -444,7 +444,6 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                              cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_multi_loop_' + str(pred_index) + '_pred.png', images[0])
                              pass
                          row_images.append(images[0])
-                         
                          pass
                     
                     if (pred_index == len(results) - 1):
@@ -484,6 +483,8 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
             
             all_images.append(row_images)
             row_images = []
+            # if len(all_images) > 10:
+            #     break
             #exit(1)
             pass
         continue
@@ -491,8 +492,10 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
     if visualize:
         print(options.suffix)
         for c in range(len(metrics)):
-            print('iteration', c)
-            metrics[c].print_metrics()
+            if c == len(metrics) - 1:
+                print('iteration', c)
+                metrics[c].print_metrics()
+                pass
             continue
     
         if len(row_images) > 0:
