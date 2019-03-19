@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 from model.modules import findLoopsModule, findMultiLoopsModule, LinearBlock, ConvBlock, compute_edge_conflict_mask, compute_loop_conflict_mask
 from model.resnet import BasicBlock, conv1x1
-from maskrcnn_benchmark.layers import roi_align
+#from maskrcnn_benchmark.layers import roi_align
 import sparseconvnet as scn
 
 def sample_points(edges, density):
@@ -575,6 +575,20 @@ class NonLocalEncoder(nn.Module):
             loop_x = self.loop_layer_3(loop_x)            
         elif 'sharing' in self.options.suffix:
             num_iterations = 2 if 'sharing2' in self.options.suffix else 1
+
+
+            # fully connected
+            n_loops = loop_edge_masks.shape[0]
+            n_edges = loop_edge_masks.shape[1]
+
+            loop_edge_masks = 1.0-torch.eye(n_loops, n_edges)
+            loop_conflict_mask = 1.0-torch.eye(n_loops, n_loops)
+            edge_conflict_mask = 1.0-torch.eye(n_edges, n_edges)
+
+            loop_edge_masks = loop_edge_masks.cuda()
+            loop_conflict_mask = loop_conflict_mask.cuda()
+            edge_conflict_mask = edge_conflict_mask.cuda()
+            
             for _ in range(num_iterations):
                 edge_pred = torch.sigmoid(self.edge_pred(edge_x)).view(-1)
                 loop_pred = torch.sigmoid(self.loop_pred(loop_x)).view(-1)

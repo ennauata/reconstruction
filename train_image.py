@@ -156,7 +156,7 @@ def main(options):
         for epoch in range(100):
             #os.system('rm ' + options.test_dir + '/' + str(num_edges) + '_*')
             dset_train.reset()
-            train_loader = DataLoader(dset_train, batch_size=1, shuffle=True, num_workers=1)    
+            train_loader = DataLoader(dset_train, batch_size=1, shuffle=True, num_workers=4)    
             epoch_losses = []
             ## Same with train_loader but provide progress bar
             data_iterator = tqdm(train_loader, total=len(dset_train))
@@ -289,13 +289,10 @@ def main(options):
                     pass
                 continue
             print('loss', np.array(epoch_losses).mean(0))
-            # if epoch % 10 == 0:
-            #     torch.save(model.state_dict(), options.checkpoint_dir + '/checkpoint_' + str(epoch // 10) + '.pth')
-            #     torch.save(semantic_model.state_dict(), options.checkpoint_dir + '/checkpoint_semantic_' + str(epoch // 10) + '.pth')                
-            #     #torch.save(optimizer.state_dict(), options.checkpoint_dir + '/optim_' + str(epoch // 10) + '.pth')
-            #     pass
-            torch.save(model.state_dict(), options.checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth')
-            torch.save(optimizer.state_dict(), options.checkpoint_dir + '/' + str(num_edges) + '_optim.pth')
+
+            if (epoch+1) % 5 == 0:
+                torch.save(model.state_dict(), options.checkpoint_dir + '/loop_checkpoint_{}_epoch_{}.pth'.format(options.suffix, epoch))
+                torch.save(optimizer.state_dict(), options.checkpoint_dir + '/loop_optim_{}_epoch_{}.pth'.format(options.suffix, epoch))
 
             with torch.no_grad():
                 testOneEpoch(options, model, dset_val) 
