@@ -34,6 +34,7 @@ def main(options):
     ##############################################################################################################
 
     # edge_pred, edge_corner, num_corners, corners = torch.load('test/debug.pth')
+    # print(edge_corner)    
     # print(edge_pred)
     # all_loops = findLoopsModule(edge_pred, edge_corner, num_corners, max_num_loop_corners=12, corners=corners, disable_colinear=True, disable_intersection=True)
     # exit(1)
@@ -153,7 +154,7 @@ def main(options):
         #     if isinstance(m, nn.BatchNorm2d):
         #         m.eval()
 
-        for epoch in range(100):
+        for epoch in range(20):
             #os.system('rm ' + options.test_dir + '/' + str(num_edges) + '_*')
             dset_train.reset()
             train_loader = DataLoader(dset_train, batch_size=1, shuffle=True, num_workers=4)    
@@ -192,7 +193,7 @@ def main(options):
                         losses.append(F.binary_cross_entropy(loop_pred, loop_gt))
                         loop_gts.append(loop_gt)
 
-                        if 'constraint':
+                        if 'constraint' in options.suffix:
                             loop_min_edge = (loop_edge_mask * edge_pred + (1 - loop_edge_mask)).min(-1)[0]                        
                             loop_edge_sum = (loop_edge_mask * edge_pred).sum(-1) - (loop_edge_mask.sum(-1) - 1)
                             losses.append(torch.mean(torch.clamp(loop_edge_sum - loop_pred, min=0) + torch.clamp(loop_pred - loop_min_edge, min=0)) * 10)
@@ -434,10 +435,10 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                          statistics = metrics[pred_index].forward(building_final)
                          images, _ = building_final.visualize(mode='', edge_state=np.ones(len(building_final.edge_corner), dtype=np.bool), color=[255, 255, 0], debug=True)
                          #cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_multi_loop_' + str(pred_index) + '_pred.png', images[0])
+                         print(building._id, statistics)                             
+                         
                          if sample_index % 500 < 16:
-                             print(building._id, statistics)                             
                              cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_multi_loop_' + str(pred_index) + '_pred.png', images[0])
-                             exit(1)
                              pass
                          row_images.append(images[0])
                          
@@ -485,6 +486,7 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
         continue
 
     if visualize:
+        print(options.suffix)
         for c in range(len(metrics)):
             print('iteration', c)
             metrics[c].print_metrics()

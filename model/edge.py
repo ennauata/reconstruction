@@ -522,6 +522,10 @@ class NonLocalEncoder(nn.Module):
 
         if 'sharing' in options.suffix:
             num_sharing_channels = 256 * 3
+            if 'separate' in self.options.suffix:
+                self.edge_pred_0 = nn.Sequential(LinearBlock(256, 64), nn.Linear(64, 1))
+                self.loop_pred_0 = nn.Sequential(LinearBlock(256, 64), nn.Linear(64, 1))
+                pass
             if '1d' in options.suffix:
                 num_sharing_channels += 256
                 kernel_size = 5
@@ -533,6 +537,13 @@ class NonLocalEncoder(nn.Module):
                 pass
             self.edge_layer_3 = LinearBlock(num_sharing_channels, 256)
             self.loop_layer_3 = LinearBlock(num_sharing_channels, 256)
+            if 'sharing2' in options.suffix:
+                if '1d' in options.suffix:
+                    self.edge_conv_1d_2 = nn.Sequential(self.padding, nn.Conv1d(256 + 3, 256, kernel_size=kernel_size), nn.ReLU(inplace=True), self.padding, nn.Conv1d(256, 256, kernel_size=kernel_size), nn.ReLU(inplace=True))
+                    self.edge_layer_3_2 = LinearBlock(num_sharing_channels, 256)
+                    self.loop_layer_3_2 = LinearBlock(num_sharing_channels, 256)
+                    pass
+                pass
         elif 'maxpool' in options.suffix:
             self.edge_layer_3 = LinearBlock(512, 256)
             self.loop_layer_3 = LinearBlock(512, 256)
@@ -590,8 +601,13 @@ class NonLocalEncoder(nn.Module):
             edge_conflict_mask = edge_conflict_mask.cuda()
             
             for _ in range(num_iterations):
-                edge_pred = torch.sigmoid(self.edge_pred(edge_x)).view(-1)
-                loop_pred = torch.sigmoid(self.loop_pred(loop_x)).view(-1)
+                if 'separate' in self.options.suffix:                    
+                    edge_pred = torch.sigmoid(self.edge_pred_0(edge_x)).view(-1)
+                    loop_pred = torch.sigmoid(self.loop_pred_0(loop_x)).view(-1)
+                else:
+                    edge_pred = torch.sigmoid(self.edge_pred(edge_x)).view(-1)
+                    loop_pred = torch.sigmoid(self.loop_pred(loop_x)).view(-1)
+                    pass
                 results.append([edge_pred, loop_pred, loop_edge_masks, loop_masks])
                 weights = loop_edge_masks * torch.abs(loop_pred.unsqueeze(-1) - edge_pred)
                 #weights = loop_edge_masks * loop_pred.unsqueeze(-1)
@@ -607,7 +623,11 @@ class NonLocalEncoder(nn.Module):
                     edge_count = torch.zeros(len(edge_x)).cuda()
                     loop_x_1d = []
                     for loop_index, edge_indices in enumerate(loop_edge_indices):
-                        loop_edge_features = self.edge_conv_1d(edge_x_info[edge_indices].transpose(0, 1).unsqueeze(0)).squeeze(0).transpose(0, 1)
+                        if _ == 0:
+                            loop_edge_features = self.edge_conv_1d(edge_x_info[edge_indices].transpose(0, 1).unsqueeze(0)).squeeze(0).transpose(0, 1)
+                        else:                            
+                            loop_edge_features = self.edge_conv_1d_2(edge_x_info[edge_indices].transpose(0, 1).unsqueeze(0)).squeeze(0).transpose(0, 1)
+                            pass
                         edge_x_1d.index_add_(0, edge_indices, loop_edge_features)
                         edge_count.index_add_(0, edge_indices, torch.ones(len(edge_indices)).cuda())
                         loop_x_1d.append(loop_edge_features.max(0)[0])
@@ -622,9 +642,14 @@ class NonLocalEncoder(nn.Module):
                     loop_xs.append(image_x.repeat((len(loop_x), 1)))                    
                     pass
                 edge_x = torch.cat(edge_xs, dim=-1)
-                loop_x = torch.cat(loop_xs, dim=-1)                
-                edge_x = self.edge_layer_3(edge_x)                        
-                loop_x = self.loop_layer_3(loop_x)
+                loop_x = torch.cat(loop_xs, dim=-1)
+                if _ == 0:
+                    edge_x = self.edge_layer_3(edge_x)                        
+                    loop_x = self.loop_layer_3(loop_x)
+                else:
+                    edge_x = self.edge_layer_3_2(edge_x)                        
+                    loop_x = self.loop_layer_3_2(loop_x)
+                    pass
                 pass
         else:
             assert(False, 'suffix invalid')
@@ -1036,7 +1061,7 @@ class NonLocalModelImage(nn.Module):
                 nn.init.constant_(m.bias, 0)
         return
 
-    def forward(self, image, all_corners, all_edges, corner_edge_pairs, edge_corner):
+    def forward(self, image, all_corners, all_edges, corner_edge_pairs, edge_corner, mode='training'):
         num_corners = len(all_corners)
         
         #image = torch.cat([image[:, :3], torch.zeros(image[:, 3:4].shape).cuda()], dim=1)
@@ -1135,17 +1160,17 @@ class NonLocalModelImage(nn.Module):
 
         edge_mask_pred = self.edge_decoder(edge_features)
         loop_mask_pred = self.loop_decoder(loop_features)
-        if self.options.suffix == '':
-            results = [[edge_pred, loop_pred, loop_edge_masks, loop_masks, edge_mask_pred, loop_mask_pred]]
-        else:
+        results = []
+        results.append([edge_pred, loop_pred, loop_edge_masks, loop_masks, edge_mask_pred, loop_mask_pred])
+        if self.options.suffix != '':
             edge_conflict_mask = compute_edge_conflict_mask(all_edges.view((-1, 2, 2))).float()
             loop_conflict_mask = compute_loop_conflict_mask(loop_edge_masks, loop_masks, all_corners, edge_corner, edge_pred).float()
             #results += self.nonlocal_encoder(edge_features, loop_features, image_x, loop_edge_masks, edge_conflict_mask, loop_conflict_mask)
             edge_directions = all_edges[:, :2] - all_edges[:, 2:]
             edge_lengths = torch.norm(edge_directions, dim=-1, keepdim=True)
             edge_info = torch.cat([edge_directions / torch.clamp(edge_lengths, min=1e-4), edge_lengths], dim=-1)
-            results = self.nonlocal_encoder(edge_features, loop_features, image_x, loop_edge_masks, edge_conflict_mask, loop_conflict_mask, loop_masks, loop_edge_indices, edge_info)
-            results[0] += [edge_mask_pred, loop_mask_pred]
+            results += self.nonlocal_encoder(edge_features, loop_features, image_x, loop_edge_masks, edge_conflict_mask, loop_conflict_mask, loop_masks, loop_edge_indices, edge_info)
+            #results[0] += [edge_mask_pred, loop_mask_pred]
             pass
         #results = [result + [loop_masks] for result in results]
         return image_pred, results    
