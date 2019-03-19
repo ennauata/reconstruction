@@ -256,7 +256,7 @@ class Building():
         self.edges_annot = edges_annot
 
         self.add_colinear_edges(self.edges_gt)
-        #self.add_colinear_edges_annot()        
+        self.add_colinear_edges_annot()        
         
         if options.suffix != '':
             suffix = '_' + corner_type + '_' + options.suffix
