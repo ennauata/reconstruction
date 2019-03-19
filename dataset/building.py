@@ -256,7 +256,7 @@ class Building():
         self.edges_annot = edges_annot
 
         self.add_colinear_edges(self.edges_gt)
-        self.add_colinear_edges_annot()        
+        #self.add_colinear_edges_annot()        
         
         if options.suffix != '':
             suffix = '_' + corner_type + '_' + options.suffix
@@ -2084,7 +2084,9 @@ class Building():
             if not has_change:
                 break
             continue
-        self.edge_corner_annots = np.concatenate([self.edge_corner_annots, np.stack(new_edge_corner, axis=0)], axis=0)
+        if len(new_edge_corner) > 0:
+            self.edge_corner_annots = np.concatenate([self.edge_corner_annots, np.stack(new_edge_corner, axis=0)], axis=0)
+            pass
         return    
 
     def post_process(self, edge_state):

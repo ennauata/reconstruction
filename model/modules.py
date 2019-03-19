@@ -321,13 +321,13 @@ def findLoopsModule(edge_confidence, edge_corner, num_corners, max_num_loop_corn
     #     continue
 
 
-    
+
+    #print(paths)
     #torch.save(paths, 'test/paths.pth')
     #torch.save(corner_confidence, 'test/confidence.pth')
     #torch.save((edge_confidence, edge_corner, num_corners, corners), 'test/debug.pth')
     #print(corner_confidence)
     #print(paths[1][1][0, 3])
-    #exit(1)
     #print(corner_confidence[4, 5])    
     return loops
 
