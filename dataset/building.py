@@ -920,12 +920,17 @@ class Building():
         # ys, xs = np.nonzero(imgs.min(-1) < 250)
         # vertices = np.array([[xs.min(), ys.min()], [xs.min(), ys.max()], [xs.max(), ys.min()], [xs.max(), ys.max()]])        
         # print(vertices)
-        ys, xs = corners[:, 1], corners[:, 0]
+        xs, ys = corners[:, 1], corners[:, 0]
         vertices = np.array([[xs.min(), ys.min()], [xs.min(), ys.max()], [xs.max(), ys.min()], [xs.max(), ys.max()]])
+
         # print(vertices)
         # exit(1)
         rotation_matrix = cv2.getRotationMatrix2D((0, 0), angle, 1)
         transformed_vertices = np.matmul(rotation_matrix, np.concatenate([vertices, np.ones((len(vertices), 1))], axis=-1).transpose()).transpose()
+
+        center = transformed_vertices.mean(0)
+        transformed_vertices = center + (transformed_vertices - center) * 1.1
+        
         mins = transformed_vertices.min(0)
         maxs = transformed_vertices.max(0)
         max_range = (maxs - mins).max()
@@ -933,8 +938,8 @@ class Building():
             new_size = min(max_range, size) + max(size - max_range, 0) * np.random.random()
             #new_size = size
         else:
-            #new_size = max_range
-            new_size = size
+            new_size = max_range
+            #new_size = size
             pass
         scale = float(new_size) / max_range
         if self.with_augmentation:
@@ -954,6 +959,8 @@ class Building():
         #print(corners)
         corners_ori = corners
         corners = np.matmul(transformation_matrix, np.concatenate([corners[:, [1, 0]], np.ones((len(corners), 1))], axis=-1).transpose()).transpose()
+        #print(scale, offset, size, mins, maxs, corners.min(), corners.max())        
+        
         if (corners.min() < 0 or corners.max() > 256) and False:
             cv2.imwrite('test/image.png', imgs.astype(np.uint8))
             print(vertices)
@@ -2219,6 +2226,8 @@ class Building():
             new_corner_mapping[mask] = new_corner_index
             new_corner_index += 1
             continue
+        if len(new_corners) == 0:
+            return
         corners = np.stack(new_corners, axis=0)
         corner_mapping = new_corner_mapping
         #corners = corners[corner_indices]
