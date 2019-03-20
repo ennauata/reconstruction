@@ -1,12 +1,15 @@
-mport numpy as np
+import numpy as np
 
 # string = """
 # a & 1.1 & 2 \\
 # b & 2.2 & 3 \\
 # """
 string = """
-a num_1 num_2
-b num_1 num_2
+Hamaguchi 26.2 26.4 5.7 86.5 22.9 46.4
+independent 0 0 0 0 0 0 
+maxpool 0 0 0 0 0 0 
+fully 0 0 0 0 0 0 
+noimage 0 0 0 0 0 0
 """
 
 def stress(string):
@@ -20,8 +23,8 @@ def stress(string):
         if len(numbers) != num:
             new_line = line
         else:
-            numbers = ['%0.3f'%(number) if number != max_numbers[index] else '\stress{' + '%0.3f'%(number) + '}' for index, number in enumerate(numbers)]
-            new_line = line.split('&')[0].strip() + ' & ' + ' & '.join(numbers) + ' \\\\'
+            numbers = ['%0.1f'%(number) if number != max_numbers[index] else '\stress{' + '%0.1f'%(number) + '}' for index, number in enumerate(numbers)]
+            new_line = "\\hline " + line.split(' ')[0].strip() + ' & ' + ' & '.join(numbers) + ' \\\\'
             pass
         print(new_line)
         continue
