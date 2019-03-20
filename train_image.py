@@ -83,8 +83,8 @@ def main(options):
     for num_edges in all_num_edges:
         print('num edges', num_edges)
         if options.restore == 1:
-            model.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth'))
-            optimizer.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges) + '_optim.pth'))
+            model.load_state_dict(torch.load(options.checkpoint_dir + '/loop_checkpoint_{}_epoch_{}.pth'.format(options.suffix, options.num_epochs - 1)))
+            optimizer.load_state_dict(torch.load(options.checkpoint_dir + '/loop_optim_{}_epoch_{}.pth'.format(options.suffix, options.num_epochs - 1)))
         elif options.restore == 2 and num_edges > 0:
             model.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges - 1) + '_checkpoint.pth'))
             optimizer.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges - 1) + '_optim.pth'))
@@ -98,7 +98,8 @@ def main(options):
             else:
                 checkpoint_dir = options.checkpoint_dir
                 pass
-            state_dict = torch.load(checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth')
+            #state_dict = torch.load(checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth')
+            state_dict = torch.load(checkpoint_dir + '/loop_checkpoint_{}_epoch_{}.pth'.format(options.suffix, options.num_epochs - 1))
             state = model.state_dict()
             new_state_dict = {k: v for k, v in state_dict.items() if k in state and state[k].shape == v.shape}
             state.update(new_state_dict)
@@ -133,7 +134,7 @@ def main(options):
         dset_train = GraphData(options, train_list, num_edges=num_edges, load_heatmaps=True)
             
 
-        for epoch in range(20):
+        for epoch in range(options.num_epochs):
             #os.system('rm ' + options.test_dir + '/' + str(num_edges) + '_*')
             dset_train.reset()
             train_loader = DataLoader(dset_train, batch_size=1, shuffle=True, num_workers=4)    
@@ -388,6 +389,7 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                     row_images.append(images[0])
 
                     if visualize and (pred_index == len(results) - 1):
+                    #if visualize and (pred_index == 0):
                          multi_loop_edge_mask, debug_info = findBestMultiLoop(loop_pred, edge_pred, loop_edge_mask, result[3], edge_corner, corners)
                          # images, _ = building.visualize(mode='', edge_state=multi_loop_edge_mask.detach().cpu().numpy() > 0.5, color=[255, 255, 0])
 
@@ -455,7 +457,7 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
     if visualize:
         print(options.suffix)
         for c in range(len(metrics)):
-            if c == len(metrics) - 1:
+            if metrics[c].n_corner_samples > 0:
                 print('iteration', c)
                 metrics[c].print_metrics()
                 pass
@@ -464,7 +466,7 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
         if len(row_images) > 0:
             all_images.append(row_images)
             pass        
-        image = tileImages(all_images[-20:], background_color=0)
+        image = tileImages(all_images[:10], background_color=0)
         cv2.imwrite(options.test_dir + '/results.png', image)
         final_images = [final_images[c * 10:(c + 1) * 10] for c in range(len(final_images) // 10)]
         image = tileImages(final_images, background_color=0)

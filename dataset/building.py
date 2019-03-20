@@ -907,8 +907,6 @@ class Building():
 
     def augment(self, imgs, corners, edges):
         size = imgs.shape[1]
-        ys, xs = np.nonzero(imgs.min(-1) < 250)
-        vertices = np.array([[xs.min(), ys.min()], [xs.min(), ys.max()], [xs.max(), ys.min()], [xs.max(), ys.max()]])
         #center = vertices[0] + np.random.random(2) * (vertices[-1] - vertices[0])
         if self.with_augmentation:
             angle = np.random.random() * 360
@@ -918,6 +916,14 @@ class Building():
         #rotation_matrix = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
         #print('vertices', tuple(((vertices[0] + vertices[-1]) / 2).tolist()))
         #rotation_matrix = cv2.getRotationMatrix2D(tuple(((vertices[0] + vertices[-1]) / 2).tolist()), angle, 1)
+        
+        # ys, xs = np.nonzero(imgs.min(-1) < 250)
+        # vertices = np.array([[xs.min(), ys.min()], [xs.min(), ys.max()], [xs.max(), ys.min()], [xs.max(), ys.max()]])        
+        # print(vertices)
+        ys, xs = corners[:, 1], corners[:, 0]
+        vertices = np.array([[xs.min(), ys.min()], [xs.min(), ys.max()], [xs.max(), ys.min()], [xs.max(), ys.max()]])
+        # print(vertices)
+        # exit(1)
         rotation_matrix = cv2.getRotationMatrix2D((0, 0), angle, 1)
         transformed_vertices = np.matmul(rotation_matrix, np.concatenate([vertices, np.ones((len(vertices), 1))], axis=-1).transpose()).transpose()
         mins = transformed_vertices.min(0)

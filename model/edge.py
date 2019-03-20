@@ -286,9 +286,9 @@ class SparseEncoderSpatial(nn.Module):
 
         
         self.distance_threshold = 5 if full_scale <= 64 else (7 if full_scale <= 128 else 15)
-        scales = [2, 4, 8, 16] if full_scale <= 64 else ([1, 2, 4] if full_scale <= 128 else [1, 2, 3, 4])
-        #output_spatial_size = 1 if full_scale <= 64 else (3 if full_scale <= 128 else 7)
-        output_spatial_size = 3
+        scales = [2, 4, 8, 16] if full_scale <= 64 else ([1, 2, 4] if full_scale <= 128 else [1, 2, 3, 4, 5])
+        output_spatial_size = 3 if full_scale <= 64 else (3 if full_scale <= 128 else 7)
+        #output_spatial_size = 3
         
         blocks = [['b', m * k, 2, 2] for k in scales]
         num_final_channels = m * scales[-1]
@@ -1043,9 +1043,14 @@ class NonLocalModelImage(nn.Module):
         self.options = options
         
         self.image_encoder = ImageAE()
-        
-        self.edge_encoder = SparseEncoderSpatial(64, 63)
-        self.loop_encoder = SparseEncoderSpatial(64, 63)        
+
+        if '64' in self.options.suffix:
+            self.edge_encoder = SparseEncoderSpatial(64, 63)
+            self.loop_encoder = SparseEncoderSpatial(64, 63)
+        else:
+            self.edge_encoder = SparseEncoderSpatial(4, 255)
+            self.loop_encoder = SparseEncoderSpatial(4, 255)
+            pass
         #self.multi_loop_pred = SparseEncoder(4, 255)
 
         self.nonlocal_encoder = NonLocalEncoder(options, 1024)
@@ -1068,7 +1073,10 @@ class NonLocalModelImage(nn.Module):
         intermediate_results = []
 
         image_pred, image_x_spatial, image_x = self.image_encoder(image)
-
+        if '64' not in self.options.suffix:
+            image_x_spatial = image
+            pass
+        
         # image = (image[0, :3].detach().cpu().numpy().transpose((1, 2, 0)) * 255).astype(np.uint8)
         # cv2.imwrite('test/image_ori.png', image)        
 
@@ -1077,6 +1085,7 @@ class NonLocalModelImage(nn.Module):
         # print(all_edges)
         #print(loop_edge_masks)
         
+        #edge_pred, edge_features = self.edge_encoder(image_x_spatial, all_edges.unsqueeze(1))
         edge_pred, edge_features = self.edge_encoder(image_x_spatial, all_edges.unsqueeze(1))
 
         #return [[edge_pred]]    

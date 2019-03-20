@@ -50,5 +50,8 @@ def parse_args():
     parser.add_argument('--building_id', dest='building_id',
                         help='the building id to debug',
                         default='', type=str)
+    parser.add_argument('--num_epochs', dest='num_epochs',
+                        help='the number of epochs',
+                        default=20, type=int)
 
     return parser.parse_args()
