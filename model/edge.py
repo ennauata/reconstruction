@@ -295,7 +295,7 @@ class SparseEncoderSpatial(nn.Module):
         self.sparse_model = scn.Sequential().add(
             scn.InputLayer(dimension, full_scale, mode=4)).add(
             scn.SubmanifoldConvolution(dimension, num_input_channels + 2, m, 3, False)).add(
-            scn.MaxPooling(dimension, 3, 2)).add(
+            #scn.MaxPooling(dimension, 3, 2)).add(
             scn.SparseResNet(dimension, m, blocks)).add(
             scn.BatchNormReLU(num_final_channels)).add(
             scn.SparseToDense(dimension, num_final_channels))
