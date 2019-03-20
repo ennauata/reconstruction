@@ -55,14 +55,14 @@ def main(options):
     ############################################# Setup Training #################################################
     ##############################################################################################################
     PREFIX = options.data_path
-    with open('{}/train_list_V2.txt'.format(PREFIX)) as f:
+    with open('{}/train_list.txt'.format(PREFIX)) as f:
         file_list = [line.strip() for line in f.readlines()]
         train_list = file_list
         # train_list = file_list[:-50]
         # valid_list = file_list[-50:]
         pass
 
-    with open('{}/valid_list_V2.txt'.format(PREFIX)) as f:
+    with open('{}/valid_list.txt'.format(PREFIX)) as f:
         valid_list = [line.strip() for line in f.readlines()]
         pass
 
