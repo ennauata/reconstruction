@@ -586,19 +586,6 @@ class NonLocalEncoder(nn.Module):
             loop_x = self.loop_layer_3(loop_x)            
         elif 'sharing' in self.options.suffix:
             num_iterations = 2 if 'sharing2' in self.options.suffix else 1
-
-
-            # fully connected
-            n_loops = loop_edge_masks.shape[0]
-            n_edges = loop_edge_masks.shape[1]
-
-            loop_edge_masks = 1.0-torch.eye(n_loops, n_edges)
-            loop_conflict_mask = 1.0-torch.eye(n_loops, n_loops)
-            edge_conflict_mask = 1.0-torch.eye(n_edges, n_edges)
-
-            loop_edge_masks = loop_edge_masks.cuda()
-            loop_conflict_mask = loop_conflict_mask.cuda()
-            edge_conflict_mask = edge_conflict_mask.cuda()
             
             for _ in range(num_iterations):
                 if 'separate' in self.options.suffix:                    

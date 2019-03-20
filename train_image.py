@@ -55,14 +55,14 @@ def main(options):
     ############################################# Setup Training #################################################
     ##############################################################################################################
     PREFIX = options.data_path
-    with open('{}/train_list.txt'.format(PREFIX)) as f:
+    with open('{}/train_list_V2.txt'.format(PREFIX)) as f:
         file_list = [line.strip() for line in f.readlines()]
         train_list = file_list
         # train_list = file_list[:-50]
         # valid_list = file_list[-50:]
         pass
 
-    with open('{}/valid_list.txt'.format(PREFIX)) as f:
+    with open('{}/valid_list_V2.txt'.format(PREFIX)) as f:
         valid_list = [line.strip() for line in f.readlines()]
         pass
 
@@ -82,8 +82,9 @@ def main(options):
     for num_edges in all_num_edges:
         print('num edges', num_edges)
         if options.restore == 1:
-            model.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth'))
-            optimizer.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges) + '_optim.pth'))
+            # model.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth'))
+            # optimizer.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges) + '_optim.pth'))
+            model.load_state_dict(torch.load(options.checkpoint_dir + '/' + 'loop_checkpoint_sharing_all_connected_epoch_19.pth'))
         elif options.restore == 2 and num_edges > 0:
             model.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges - 1) + '_checkpoint.pth'))
             optimizer.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges - 1) + '_optim.pth'))

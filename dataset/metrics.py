@@ -190,21 +190,11 @@ class Metrics():
             if near_gt[1] >= iou_thresh and not found[near_gt[0]]:
                 per_sample_loop_tp += 1.0
                 found[near_gt[0]] = True
-
+                
             # not hit or already found
             else:
                 per_sample_loop_fp += 1.0
-
-        # import cv2
-        # print(pred_edge_map.shape, pred_edge_map.max())
-        # cv2.imwrite('test/mask.png', (pred_edge_map).astype(np.uint8))
-        # for index, mask in enumerate(pred_rs):
-        #     print(mask.shape, mask.max())
-        #     cv2.imwrite('test/mask_' + str(index) + '.png', (mask * 255).astype(np.uint8))
-        #     continue
-        # exit(1)
         
-                
         # update counters for corners
         self.curr_loop_tp += per_sample_loop_tp
         self.curr_loop_fp += per_sample_loop_fp
