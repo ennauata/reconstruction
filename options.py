@@ -22,7 +22,7 @@ def parse_args():
                         default=0, type=int)
     parser.add_argument('--num_training_images', dest='num_training_images',
                         help='num training images',
-                        default=1000, type=int)
+                        default=-1, type=int)
     parser.add_argument('--num_testing_images', dest='num_testing_images',
                         help='num testing images',
                         default=-1, type=int)
@@ -47,5 +47,8 @@ def parse_args():
     parser.add_argument('--max_num_loop_corners', dest='max_num_loop_corners',
                         help='maximum number of loop corners',
                         default=12, type=int)
+    parser.add_argument('--building_id', dest='building_id',
+                        help='the building id to debug',
+                        default='', type=str)
 
     return parser.parse_args()

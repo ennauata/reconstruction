@@ -138,6 +138,7 @@ class Metrics():
             
             # check if corners are mapped
             if (c1 not in c_det_annot.keys()) or (c2 not in c_det_annot.keys()):
+                per_sample_edge_fp += 1.0                
                 continue
 
             # check hit

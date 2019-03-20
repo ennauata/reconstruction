@@ -924,8 +924,8 @@ class Building():
         maxs = transformed_vertices.max(0)
         max_range = (maxs - mins).max()
         if self.with_augmentation:
-            #new_size = min(max_range, size) + max(size - max_range, 0) * np.random.random()
-            new_size = size
+            new_size = min(max_range, size) + max(size - max_range, 0) * np.random.random()
+            #new_size = size
         else:
             #new_size = max_range
             new_size = size
@@ -2092,7 +2092,7 @@ class Building():
     def post_process(self, edge_state):
         self.add_colinear_edges(edge_state)
         dot_product_threshold = np.cos(np.deg2rad(20))    
-        distance_threshold = 0.02
+        distance_threshold = 0.01
 
         edge_corner = self.edge_corner[edge_state]
         corners = self.corners_det.astype(np.float32) / 256
@@ -2133,6 +2133,12 @@ class Building():
         corner_edge_mask = (tangent_distance > 0) & (tangent_distance < 1) & (normal_distance < distance_threshold)
         parallel_mask = np.abs((np.expand_dims(edge_directions, 1) * edge_directions).sum(-1)) > dot_product_threshold
         colinear_mask = np.maximum(corner_edge_mask[edge_corner[:, 0]], corner_edge_mask[edge_corner[:, 1]]) & parallel_mask
+        # print(corners)
+        # print(edges)
+        # print(corner_edge_mask)
+        # print(edge_corner)
+        # print(colinear_mask)
+        # exit(1)
         edge_groups = []
         visited_mask = np.zeros(num_edges, dtype=np.bool)
         for edge_index in range(num_edges):
@@ -2164,7 +2170,7 @@ class Building():
             line_1 = edge_lines[edge_index_1]
             for corner_index in corner_indices_1:
                 for edge_index_2 in range(num_edges):        
-                    if corner_edge_mask[corner_index, edge_index_2] and not colinear_mask[edge_index_1, edge_index_2]:
+                    if corner_edge_mask[corner_index, edge_index_2] and not parallel_mask[edge_index_1, edge_index_2]:
                         line_2 = edge_lines[edge_index_2]
                         corner = np.linalg.lstsq(np.stack([line_1, line_2], axis=0), np.ones(2), rcond=None)[0]
                         corners[corner_index] = corner
@@ -2187,11 +2193,14 @@ class Building():
             for corner_index_2, corner_2 in enumerate(corners):
                 if corner_index_2 == corner_index_1:
                     break
-                if np.linalg.norm(corner_1 - corner_2) < distance_threshold:
-                    corner_mapping[corner_index_1] = corner_mapping[corner_index_2]
-                    pass
+                if ((edge_corner == np.array([corner_index_1, corner_index_2])).all(-1).any() or (edge_corner == np.array([corner_index_2, corner_index_1])).all(-1).any()):
+                    continue
+                if np.linalg.norm(corner_1 - corner_2) > distance_threshold:
+                    continue
+                corner_mapping[corner_index_1] = corner_mapping[corner_index_2]
                 continue
             continue
+
         corner_indices, corner_mapping = np.unique(corner_mapping, return_inverse=True)
         new_corners = []
         new_corner_mapping = corner_mapping
@@ -2212,6 +2221,11 @@ class Building():
         _, edge_indices = np.unique(edge_values, return_index=True)
         edge_corner = edge_corner[edge_indices]
         edge_corner = edge_corner[edge_corner[:, 0] != edge_corner[:, 1]]
+        # print(self.corners_det)
+        # print(corners)
+        # print(edge_corner)
+        # exit(1)
+        #print(self.edge_corner)
         self.edge_corner = edge_corner
         corners = (corners * 256).astype(np.int32)
         self.corners_det = corners
