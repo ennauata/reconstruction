@@ -286,8 +286,8 @@ class SparseEncoderSpatial(nn.Module):
 
         
         self.distance_threshold = 5 if full_scale <= 64 else (7 if full_scale <= 128 else 15)
-        scales = [2, 4, 8, 16] if full_scale <= 64 else ([1, 2, 4] if full_scale <= 128 else [1, 2, 3, 4, 5])
-        output_spatial_size = 3 if full_scale <= 64 else (3 if full_scale <= 128 else 7)
+        scales = [2, 4, 8, 16] if full_scale <= 64 else ([1, 2, 4] if full_scale <= 128 else [1, 2, 3, 4, 5, 6])
+        output_spatial_size = 3 if full_scale <= 64 else (3 if full_scale <= 128 else 1)
         #output_spatial_size = 3
         
         blocks = [['b', m * k, 2, 2] for k in scales]
@@ -295,7 +295,7 @@ class SparseEncoderSpatial(nn.Module):
         self.sparse_model = scn.Sequential().add(
             scn.InputLayer(dimension, full_scale, mode=4)).add(
             scn.SubmanifoldConvolution(dimension, num_input_channels + 2, m, 3, False)).add(
-            #scn.MaxPooling(dimension, 3, 2)).add(
+            scn.MaxPooling(dimension, 3, 2)).add(
             scn.SparseResNet(dimension, m, blocks)).add(
             scn.BatchNormReLU(num_final_channels)).add(
             scn.SparseToDense(dimension, num_final_channels))
