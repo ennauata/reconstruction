@@ -30,8 +30,8 @@ def edge_points(UVs, edges, size, distance_threshold=3, return_mask=False):
     all_edge_mask = (normal_distances <= distance_threshold) & (direction_distances <= 1) & (direction_distances >= 0) | (torch.norm(UVs - edges[:, :2], dim=-1) <= distance_threshold) | (torch.norm(UVs - edges[:, 2:4], dim=-1) <= distance_threshold)
     edge_mask = all_edge_mask.max(-1)[0]
     edge_info = torch.cat([directions, lengths.unsqueeze(-1)], dim=-1)
-    point_offsets = 1 - torch.min(direction_distances, 1 - direction_distances)
-    points_info = torch.stack([point_offsets, 1 - normal_distances / distance_threshold], dim=-1)
+    point_offsets = torch.min(direction_distances, 1 - direction_distances)
+    points_info = torch.stack([point_offsets, normal_distances / distance_threshold], dim=-1)
     #points_info = torch.cat([point_offsets.unsqueeze(-1), edge_info.repeat((len(direction_distances), len(direction_distances), 1, 1))], dim=-1)
     #points_info = point_offsets.unsqueeze(-1)
     points_info = (points_info * all_edge_mask.float().unsqueeze(-1)).sum(-2) / torch.clamp(all_edge_mask.float().unsqueeze(-1).sum(-2), min=1e-4)
