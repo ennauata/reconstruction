@@ -32,9 +32,9 @@ def edge_points(UVs, edges, size, distance_threshold=3):
     points = edge_mask.nonzero()
     edge_info = torch.cat([directions, lengths.unsqueeze(-1)], dim=-1)
     point_offsets = torch.min(direction_distances, 1 - direction_distances)
-    #points_info = torch.stack([point_offsets, normal_distances / distance_threshold], dim=-1)
+    points_info = torch.stack([point_offsets, normal_distances / distance_threshold], dim=-1)
     #points_info = torch.cat([point_offsets.unsqueeze(-1), edge_info.repeat((len(direction_distances), len(direction_distances), 1, 1))], dim=-1)
-    points_info = point_offsets.unsqueeze(-1)
+    #points_info = point_offsets.unsqueeze(-1)
     points_info = (points_info * all_edge_mask.float().unsqueeze(-1)).sum(-2) / torch.clamp(all_edge_mask.float().unsqueeze(-1).sum(-2), min=1e-4)
     points_info = points_info[points[:, 0], points[:, 1]]
     return points, points_info
@@ -286,15 +286,15 @@ class SparseEncoderSpatial(nn.Module):
 
         
         self.distance_threshold = 5 if full_scale <= 64 else (7 if full_scale <= 128 else 15)
-        scales = [2, 4, 8, 16] if full_scale <= 64 else ([1, 2, 4] if full_scale <= 128 else [1, 2, 3, 4])
-        #output_spatial_size = 1 if full_scale <= 64 else (3 if full_scale <= 128 else 7)
-        output_spatial_size = 3
+        scales = [2, 4, 8, 16] if full_scale <= 64 else ([1, 2, 4] if full_scale <= 128 else [1, 2, 3, 4, 5, 6])
+        output_spatial_size = 3 if full_scale <= 64 else (3 if full_scale <= 128 else 1)
+        #output_spatial_size = 3
         
         blocks = [['b', m * k, 2, 2] for k in scales]
         num_final_channels = m * scales[-1]
         self.sparse_model = scn.Sequential().add(
             scn.InputLayer(dimension, full_scale, mode=4)).add(
-            scn.SubmanifoldConvolution(dimension, num_input_channels + 1, m, 3, False)).add(
+            scn.SubmanifoldConvolution(dimension, num_input_channels + 2, m, 3, False)).add(
             #scn.MaxPooling(dimension, 3, 2)).add(
             scn.SparseResNet(dimension, m, blocks)).add(
             scn.BatchNormReLU(num_final_channels)).add(
@@ -382,7 +382,7 @@ class SparseEncoderSpatialDebug(nn.Module):
         all_points = []
         all_indices = []
         for edge_index, edges in enumerate(all_edges):
-            points = edge_points(self.UVs, edges, self.full_scale, distance_threshold=self.distance_threshold)
+            points, points_info = edge_points(self.UVs, edges, self.full_scale, distance_threshold=self.distance_threshold)
             all_points.append(points)
             all_indices.append(torch.full((len(points), 1), edge_index).cuda().long())
             continue
@@ -540,9 +540,9 @@ class NonLocalEncoder(nn.Module):
             if 'sharing2' in options.suffix:
                 if '1d' in options.suffix:
                     self.edge_conv_1d_2 = nn.Sequential(self.padding, nn.Conv1d(256 + 3, 256, kernel_size=kernel_size), nn.ReLU(inplace=True), self.padding, nn.Conv1d(256, 256, kernel_size=kernel_size), nn.ReLU(inplace=True))
-                    self.edge_layer_3_2 = LinearBlock(num_sharing_channels, 256)
-                    self.loop_layer_3_2 = LinearBlock(num_sharing_channels, 256)
                     pass
+                self.edge_layer_3_2 = LinearBlock(num_sharing_channels, 256)
+                self.loop_layer_3_2 = LinearBlock(num_sharing_channels, 256)
                 pass
         elif 'maxpool' in options.suffix:
             self.edge_layer_3 = LinearBlock(512, 256)
@@ -586,7 +586,7 @@ class NonLocalEncoder(nn.Module):
             loop_x = self.loop_layer_3(loop_x)            
         elif 'sharing' in self.options.suffix:
             num_iterations = 2 if 'sharing2' in self.options.suffix else 1
-            
+
             for _ in range(num_iterations):
                 if 'separate' in self.options.suffix:                    
                     edge_pred = torch.sigmoid(self.edge_pred_0(edge_x)).view(-1)
@@ -1031,9 +1031,14 @@ class NonLocalModelImage(nn.Module):
         self.options = options
         
         self.image_encoder = ImageAE()
-        
-        self.edge_encoder = SparseEncoderSpatial(64, 63)
-        self.loop_encoder = SparseEncoderSpatial(64, 63)        
+
+        if '64' in self.options.suffix:
+            self.edge_encoder = SparseEncoderSpatial(64, 63)
+            self.loop_encoder = SparseEncoderSpatial(64, 63)
+        else:
+            self.edge_encoder = SparseEncoderSpatial(4, 255)
+            self.loop_encoder = SparseEncoderSpatial(4, 255)
+            pass
         #self.multi_loop_pred = SparseEncoder(4, 255)
 
         self.nonlocal_encoder = NonLocalEncoder(options, 1024)
@@ -1056,7 +1061,10 @@ class NonLocalModelImage(nn.Module):
         intermediate_results = []
 
         image_pred, image_x_spatial, image_x = self.image_encoder(image)
-
+        if '64' not in self.options.suffix:
+            image_x_spatial = image
+            pass
+        
         # image = (image[0, :3].detach().cpu().numpy().transpose((1, 2, 0)) * 255).astype(np.uint8)
         # cv2.imwrite('test/image_ori.png', image)        
 
@@ -1065,6 +1073,7 @@ class NonLocalModelImage(nn.Module):
         # print(all_edges)
         #print(loop_edge_masks)
         
+        #edge_pred, edge_features = self.edge_encoder(image_x_spatial, all_edges.unsqueeze(1))
         edge_pred, edge_features = self.edge_encoder(image_x_spatial, all_edges.unsqueeze(1))
 
         #return [[edge_pred]]    
@@ -1083,11 +1092,21 @@ class NonLocalModelImage(nn.Module):
                 loop_confidence.append(confidence[loop_index])
                 continue
             continue
+        loop_confidence = torch.stack(loop_confidence, dim=0)                        
+        if len(loop_corner_indices) > 1:
+            loop_subset_mask = torch.stack([torch.stack([(corner_indices_1.unsqueeze(-1) == corner_indices_2).max(-1)[0].min(0)[0] for corner_indices_2 in loop_corner_indices]) for corner_indices_1 in loop_corner_indices])
+            loop_subset_mask = torch.max(loop_subset_mask, loop_subset_mask.transpose(0, 1))
+            confidence_mask = loop_confidence.unsqueeze(-1) < loop_confidence
+            valid_indices = ((loop_subset_mask & confidence_mask).max(-1)[0] == 0).nonzero()[:, 0]
+            loop_confidence = loop_confidence[valid_indices]
+            loop_corner_indices = [loop_corner_indices[index] for index in valid_indices]
+            pass
+        
         if len(loop_confidence) > 200:
             #order = np.argsort([confidence.item() for confidence in loop_confidence])[::-1][:200]
             order = np.argsort(loop_confidence)[::-1][:200]
             np.random.shuffle(order)
-            loop_confidence = [loop_confidence[index] for index in order]
+            loop_confidence = loop_confidence[order]
             loop_corner_indices = [loop_corner_indices[index] for index in order]
             pass
 
@@ -1135,7 +1154,6 @@ class NonLocalModelImage(nn.Module):
 
         
         loop_info = list(zip(loop_corner_indices, loop_edge_masks, loop_masks))
-        loop_confidence = torch.stack(loop_confidence, dim=0)                
         loop_edge_masks = torch.stack(loop_edge_masks, dim=0)
         loop_masks = torch.stack(loop_masks, dim=0)
         #loop_pred = self.loop_pred(image_x_1_up[0], loop_corners)
@@ -1143,6 +1161,8 @@ class NonLocalModelImage(nn.Module):
         #print([(edge_indices, loop_edge_masks[index].nonzero()[:, 0]) for index, edge_indices in enumerate(loop_edge_indices)])
         #loop_edges = [all_edges[loop_edge_masks[index].nonzero()[:, 0]] for index in range(len(loop_edge_masks))]
         #loop_edges = torch.stack(all_loop_edges, dim=0)
+        #print(all_corners)
+        #print(loop_corner_indices)
         loop_pred, loop_features = self.loop_encoder(image_x_spatial, all_loop_edges)
 
         edge_mask_pred = self.edge_decoder(edge_features)

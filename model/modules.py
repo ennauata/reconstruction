@@ -521,7 +521,8 @@ def findBestMultiLoop(loop_confidence, edge_confidence, loop_edges, loop_masks, 
 
     multi_loop_edge_masks = (multi_loop_masks.long().unsqueeze(-1) * loop_edges.long()).max(1)[0]
 
-    multi_loop_confidence = (multi_loop_masks.float() * ((loop_confidence - 0.5) * loop_num_edges)).sum(-1)
+    #multi_loop_confidence = (multi_loop_masks.float() * ((loop_confidence - 0.5) * loop_num_edges)).sum(-1)
+    multi_loop_confidence = (multi_loop_masks.float() * (loop_confidence - 0.5)).sum(-1)
     multi_loop_edge_confidence = (multi_loop_edge_masks.float() * (edge_confidence - 0.5)).sum(-1)    
 
     best_multi_loop = multi_loop_edge_masks[(multi_loop_confidence + multi_loop_edge_confidence).max(0)[1]]

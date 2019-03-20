@@ -68,6 +68,7 @@ def main(options):
 
     train_list = train_list + valid_list[:-100]    
     valid_list = valid_list[-100:]
+    #valid_list = train_list[:10]
     
     best_score = 0.0
     mt = Metrics()
@@ -82,9 +83,10 @@ def main(options):
     for num_edges in all_num_edges:
         print('num edges', num_edges)
         if options.restore == 1:
-            # model.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth'))
-            # optimizer.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges) + '_optim.pth'))
-            model.load_state_dict(torch.load(options.checkpoint_dir + '/' + 'loop_checkpoint_sharing_all_connected_epoch_19.pth'))
+
+            #model.load_state_dict(torch.load(options.checkpoint_dir + '/' + 'loop_checkpoint_sharing_all_connected_epoch_19.pth'))
+            model.load_state_dict(torch.load(options.checkpoint_dir + '/loop_checkpoint_{}_epoch_{}.pth'.format(options.suffix, options.num_epochs - 1)))
+            optimizer.load_state_dict(torch.load(options.checkpoint_dir + '/loop_optim_{}_epoch_{}.pth'.format(options.suffix, options.num_epochs - 1)))
         elif options.restore == 2 and num_edges > 0:
             model.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges - 1) + '_checkpoint.pth'))
             optimizer.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges - 1) + '_optim.pth'))
@@ -98,7 +100,8 @@ def main(options):
             else:
                 checkpoint_dir = options.checkpoint_dir
                 pass
-            state_dict = torch.load(checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth')
+            #state_dict = torch.load(checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth')
+            state_dict = torch.load(checkpoint_dir + '/loop_checkpoint_{}_epoch_{}.pth'.format(options.suffix, options.num_epochs - 1))
             state = model.state_dict()
             new_state_dict = {k: v for k, v in state_dict.items() if k in state and state[k].shape == v.shape}
             state.update(new_state_dict)
@@ -132,30 +135,8 @@ def main(options):
 
         dset_train = GraphData(options, train_list, num_edges=num_edges, load_heatmaps=True)
             
-        #train_loader = DataLoader(dset_train, batch_size=64, shuffle=True, num_workers=1, collate_fn=PadCollate())
 
-        if options.task == 'search':
-            for split, dataset in [('train', dset_train), ('val', dset_val)]:
-                all_statistics = np.zeros(options.max_num_edges + 1)
-                for building in dataset.buildings:
-                    building.reset(num_edges)
-                    statistics = validator.search(building, num_edges_target=num_edges + 1)
-                    all_statistics += statistics
-                    if statistics.sum() < 1:
-                        print(building._id, statistics.sum(), building.num_edges, building.num_edges_gt)
-                        pass
-                    building.save()
-                    continue
-                print(split, all_statistics / len(dataset.buildings))
-                continue
-            exit(1)
-            pass
-
-        # for m in model.modules():
-        #     if isinstance(m, nn.BatchNorm2d):
-        #         m.eval()
-
-        for epoch in range(20):
+        for epoch in range(options.num_epochs):
             #os.system('rm ' + options.test_dir + '/' + str(num_edges) + '_*')
             dset_train.reset()
             train_loader = DataLoader(dset_train, batch_size=1, shuffle=True, num_workers=4)    
@@ -311,10 +292,10 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
     ## Same with train_loader but provide progress bar
     data_loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=1)    
     data_iterator = tqdm(data_loader, total=len(dataset))
-    statistics = np.zeros(6)
-    statistics_per_length = np.zeros((350, 4))
+    all_statistics = []
     all_images = []
-    row_images = []    
+    row_images = []
+    final_images = []        
     for sample_index, sample in enumerate(data_iterator):
         im_arr, corner_images, edge_images, corners, edges, corner_gt, edge_gt, corner_edge_pairs, edge_corner, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(0), sample[9].cuda().squeeze(), sample[10].cuda().squeeze(), sample[11].squeeze().item()
 
@@ -340,6 +321,7 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                 loop_gt = ((loop_edge * edge_gt).sum(-1) == loop_edge.sum(-1)).float()
                 losses.append(F.binary_cross_entropy(loop_pred, loop_gt))
                 loop_gts.append(loop_gt)
+                #print(index, edge_pred, edge_gt, loop_pred, loop_gt, losses[-2:])                
                 pass
             if len(result) > 4:
                 edge_mask_pred = result[4]
@@ -350,7 +332,6 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                 losses.append(torch.nn.functional.binary_cross_entropy(loop_mask_pred, loop_mask_gt))                
                 pass            
             continue
-
         loss = sum(losses)        
 
         loss_values = [l.data.item() for l in losses]
@@ -361,24 +342,6 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
             continue
         data_iterator.set_description(status)
         
-
-        # edges = edges.detach().cpu().numpy() * 256.0
-        # lengths = np.sqrt((edges[:, 0] - edges[:, 2])**2 + (edges[:, 1] - edges[:, 3])**2)
-        # lengths = lengths.astype('int32')
-
-        # edge_pred = edge_pred.detach().cpu().numpy()
-
-        # edge_gt = edge_gt.detach().cpu().numpy() > 0.5
-        # statistics[0] += np.logical_and(edge_pred > 0.5, edge_gt == 1).sum()
-        # statistics[1] += np.logical_and(edge_pred < 0.5, edge_gt == 1).sum()                  
-        # statistics[2] += np.logical_and(edge_pred > 0.5, edge_gt == 0).sum()                  
-        # statistics[3] += np.logical_and(edge_pred < 0.5, edge_gt == 0).sum()
-        # statistics[4] += np.all(edge_pred == edge_gt)
-        # statistics[5] += 1        
-        # statistics_per_length[lengths, 0] += np.logical_and(edge_pred > 0.5, edge_gt == 1).sum()
-        # statistics_per_length[lengths, 1] += np.logical_and(edge_pred < 0.5, edge_gt == 1).sum()                  
-        # statistics_per_length[lengths, 2] += np.logical_and(edge_pred > 0.5, edge_gt == 0).sum()                  
-        # statistics_per_length[lengths, 3] += np.logical_and(edge_pred < 0.5, edge_gt == 0).sum()
 
         if sample_index % 500 < 16 or visualize:
             if visualize and len(metrics) == 0:                                
@@ -428,6 +391,7 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                     row_images.append(images[0])
 
                     if visualize and (pred_index == len(results) - 1):
+                    #if visualize and (pred_index == 0):
                          multi_loop_edge_mask, debug_info = findBestMultiLoop(loop_pred, edge_pred, loop_edge_mask, result[3], edge_corner, corners)
                          # images, _ = building.visualize(mode='', edge_state=multi_loop_edge_mask.detach().cpu().numpy() > 0.5, color=[255, 255, 0])
 
@@ -437,11 +401,12 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                          images, _ = building_final.visualize(mode='', edge_state=np.ones(len(building_final.edge_corner), dtype=np.bool), color=[255, 255, 0], debug=True)
                          #cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_multi_loop_' + str(pred_index) + '_pred.png', images[0])
                          print(building._id, statistics)                             
-                         
+                         all_statistics.append(statistics)
                          if sample_index % 500 < 16:
                              cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_multi_loop_' + str(pred_index) + '_pred.png', images[0])
                              pass
                          row_images.append(images[0])
+                         final_images.append(images[0])
                          pass
                     
                     if (pred_index == len(results) - 1):
@@ -481,6 +446,10 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
             
             all_images.append(row_images)
             row_images = []
+            if options.building_id != '':
+                exit(1)
+                pass
+            
             # if len(all_images) > 10:
             #     break
             #exit(1)
@@ -490,7 +459,7 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
     if visualize:
         print(options.suffix)
         for c in range(len(metrics)):
-            if c == len(metrics) - 1:
+            if metrics[c].n_corner_samples > 0:
                 print('iteration', c)
                 metrics[c].print_metrics()
                 pass
@@ -499,8 +468,12 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
         if len(row_images) > 0:
             all_images.append(row_images)
             pass        
-        image = tileImages(all_images[:20], background_color=0)
-        cv2.imwrite(options.test_dir + '/results.png', image)        
+        image = tileImages(all_images[:10], background_color=0)
+        cv2.imwrite(options.test_dir + '/results.png', image)
+        final_images = [final_images[c * 10:(c + 1) * 10] for c in range(len(final_images) // 10)]
+        image = tileImages(final_images, background_color=0)
+        cv2.imwrite(options.test_dir + '/results_final.png', image)
+        np.save(options.test_dir + '/statistics.npy', np.stack(all_statistics))
         pass
 
     #print('statistics', statistics[0] / (statistics[0] + statistics[1]), statistics[3] / (statistics[2] + statistics[3]), statistics[4] / statistics[5], statistics[5])
