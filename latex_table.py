@@ -5,7 +5,7 @@ import numpy as np
 # b & 2.2 & 3 \\
 # """
 string = """
-Hamaguchi 26.2 26.4 5.7 86.5 22.9 46.4
+Hamaguchi 26.4 26.2 7.3 5.7 46.4 22.9
 independent 0 0 0 0 0 0 
 maxpool 0 0 0 0 0 0 
 fully 0 0 0 0 0 0 
