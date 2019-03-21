@@ -226,7 +226,16 @@ class Metrics():
         self.curr_loop_tp += per_sample_loop_tp
         self.curr_loop_fp += per_sample_loop_fp
         self.n_loop_samples += len(annot_rs)
-        self.per_loop_sample_score.update({building._id: {'recall': per_sample_loop_tp/len(annot_rs), 'precision': per_sample_loop_tp/(per_sample_loop_tp+per_sample_loop_fp+1e-8)}}) 
+        self.per_loop_sample_score.update({building._id: {'recall': per_sample_loop_tp/len(annot_rs), 'precision': per_sample_loop_tp/(per_sample_loop_tp+per_sample_loop_fp+1e-8)}})
+
+        # import cv2
+        # print(annot_edge_map.shape, annot_edge_map.max())
+        # cv2.imwrite('test/mask.png', (annot_edge_map).astype(np.uint8))
+        # for index, mask in enumerate(annot_rs):
+        #     print(mask.shape, mask.max())
+        #     cv2.imwrite('test/mask_' + str(index) + '.png', (mask * 255).astype(np.uint8))
+        #     continue
+        # exit(1)
         return np.array([per_sample_corner_tp, per_sample_corner_fp, gts.shape[0], per_sample_edge_tp, per_sample_edge_fp, building.edge_corner_annots.shape[0], per_sample_loop_tp, per_sample_loop_fp, len(annot_rs)])
 
 def extract_regions(region_mask):
@@ -278,7 +287,7 @@ def draw_edges(edge_corner, corners, mode="det"):
         elif "det" in mode:
             y1, x1 = corners[c1]
             y2, x2 = corners[c2]
-        draw.line((x1, y1, x2, y2), width=1, fill='white')
+        draw.line((x1, y1, x2, y2), width=3, fill='white')
 
     # import matplotlib.pyplot as plt
     # plt.imshow(im)
