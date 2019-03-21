@@ -708,14 +708,16 @@ def findBestMultiLoopEdge(edge_confidence, edge_corner, all_corners):
         multi_loop_edge_confidence = (multi_loop_edge_masks.float() * (edge_confidence - 0.5)).sum(-1)
     else:
         edge_normals = all_edges / torch.clamp(torch.norm(all_edges, dim=-1, keepdim=True), 1e-4)
-        dot_product = (edge_normals[:, 0].unsqueeze(-2) * edge_normals[:, 0]).sum(-1)
+        dot_product = (edge_normals[:, 0].unsqueeze(-2) * edge_normals[:, 1]).sum(-1)
         colinear_mask = torch.abs(dot_product) > dot_product_threshold
         same_corner_mask = (edge_corner.unsqueeze(0).unsqueeze(-2) == edge_corner.unsqueeze(1).unsqueeze(-1)).max(-1)[0].max(-1)[0]
         active_mask = torch.max(edge_confidence.unsqueeze(-1), edge_confidence) > 0.5
         colinear_mask = colinear_mask & same_corner_mask & active_mask
+        print(colinear_mask)                
         while True:
             new_colinear_mask = (colinear_mask.unsqueeze(1) * colinear_mask).max(1)[0]
             if (new_colinear_mask == colinear_mask).min():
+                print(new_colinear_mask, colinear_mask, (new_colinear_mask == colinear_mask).min())
                 break
             colinear_mask = colinear_mask
             continue
@@ -724,8 +726,11 @@ def findBestMultiLoopEdge(edge_confidence, edge_corner, all_corners):
         edge_group_masks = edge_group_masks.unsqueeze(-1) == torch.arange(len(_)).cuda()
         edge_group_masks = edge_group_masks.float()
         group_confidence = (edge_group_masks * edge_confidence.unsqueeze(-1)).sum(0) / torch.clamp(edge_group_masks.sum(0), 1e-4)
-        
+
+        print(colinear_mask)        
+        print(edge_group_masks)
         multi_loop_group_masks = (multi_loop_edge_masks.float().unsqueeze(-1) * edge_group_masks).max(1)[0]
+        print(multi_loop_group_masks)
         multi_loop_edge_confidence = (multi_loop_group_masks.float() * (group_confidence - 0.5)).sum(-1)        
         pass
     
