@@ -392,7 +392,7 @@ class Building():
         num_edges_source: source graph size, -1 for using the latest
         """
         #assert(num_edges_source < len(self.predicted_edges))
-
+        print(self._id)
         if self.with_augmentation:
             imgs, corners_det, edges_det = self.augment(self.rgb.copy(), self.corners_det, self.edges_det)
         else:

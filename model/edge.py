@@ -1116,7 +1116,6 @@ class NonLocalModelImage(nn.Module):
         Us = torch.arange(mask_size).float().cuda().repeat((mask_size, 1))
         Vs = torch.arange(mask_size).float().cuda().unsqueeze(-1).repeat((1, mask_size))
         UVs = torch.stack([Vs, Us], dim=-1)
-    
         
         loop_edge_masks = []
         loop_masks = []
@@ -1154,9 +1153,10 @@ class NonLocalModelImage(nn.Module):
             loop_masks.append(mask)            
             continue
 
-        
         loop_info = list(zip(loop_corner_indices, loop_edge_masks, loop_masks))
         loop_edge_masks = torch.stack(loop_edge_masks, dim=0)
+        #loop_edge_masks = np.zeros_like(loop_edge_masks)
+
         loop_masks = torch.stack(loop_masks, dim=0)
         #loop_pred = self.loop_pred(image_x_1_up[0], loop_corners)
         #loop_edges = [all_edges[edge_indices] for edge_indices in loop_edge_indices]

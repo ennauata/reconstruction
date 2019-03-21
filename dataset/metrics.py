@@ -33,6 +33,10 @@ class Metrics():
         return recall, precision
 
     def calc_edge_metrics(self):
+        print(self.curr_edge_tp)
+        print(self.curr_edge_fp)
+        print(self.n_edge_samples)
+
         recall = self.curr_edge_tp/self.n_edge_samples
         precision = self.curr_edge_tp/(self.curr_edge_tp+self.curr_edge_fp+1e-8)
         return recall, precision
@@ -48,18 +52,18 @@ class Metrics():
         values = []
         recall, precision = self.calc_corner_metrics()
         f_score = 2.0*precision*recall/(precision+recall+1e-8)
-        values += [recall, precision, f_score]
+        values += [precision, recall]
         print('Overall Scores\n-- corners \nrecall: %.3f\nprecision: %.3f\nf_score: %.3f\n' % (recall, precision, f_score))
 
         # print scores
         recall, precision = self.calc_edge_metrics()
         f_score = 2.0*precision*recall/(precision+recall+1e-8)
-        values += [recall, precision, f_score]        
+        values += [precision, recall]        
         print('Overall Scores\n-- edges \nrecall: %.3f\nprecision: %.3f\nf_score: %.3f\n' % (recall, precision, f_score))
 
         recall, precision = self.calc_loop_metrics()
         f_score = 2.0*precision*recall/(precision+recall+1e-8)
-        values += [recall, precision, f_score]
+        values += [precision, recall]
         print('-- loops \nrecall: %.3f\nprecision: %.3f\nf_score: %.3f\n' % (recall, precision, f_score))
 
         # print('Per sample')
@@ -145,10 +149,24 @@ class Metrics():
             c1_prime = c_det_annot[c1]
             c2_prime = c_det_annot[c2]
             is_hit = False
+
             for k, e_annot in enumerate(building.edge_corner_annots):
                 c3, c4 = e_annot
                 if ((c1_prime == c3) and (c2_prime == c4)) or ((c1_prime == c4) and (c2_prime == c3)):
                     is_hit = True
+
+                    # y1, x1, _, _ = building.corners_annot[c1_prime]
+                    # y2, x2, _, _ = building.corners_annot[c2_prime]
+
+                    # y3, x3 = building.corners_det[c1]
+                    # y4, x4 = building.corners_det[c2]
+
+                    # debug_im = Image.new("RGB", (256,256))
+                    # draw = ImageDraw.Draw(debug_im)
+                    # draw.line((x1, y1, x2, y2), "blue")
+                    # draw.line((x3, y3, x4, y4), "red")
+                    # plt.imshow(debug_im)
+                    # plt.show()
 
             # hit
             if is_hit == True:
@@ -162,6 +180,14 @@ class Metrics():
         self.curr_edge_fp += per_sample_edge_fp
         self.n_edge_samples += building.edge_corner_annots.shape[0]
         self.per_edge_sample_score.update({building._id: {'recall': per_sample_edge_tp/building.edge_corner_annots.shape[0], 'precision': per_sample_edge_tp/(per_sample_edge_tp+per_sample_edge_fp+1e-8)}}) 
+
+        # plt.imshow(building.rgb)
+        # print(building._id)
+        # print(self.per_edge_sample_score[building._id])
+        # print(per_sample_edge_tp)
+        # print(per_sample_edge_fp)
+        # print(building.edge_corner_annots.shape[0])
+        # plt.show()
 
         ## Compute loops precision/recall
         per_sample_loop_tp = 0.0
