@@ -335,7 +335,7 @@ def compute_loop_conflict_mask(loop_edge_masks, loop_masks, corners, edge_corner
     num_loops = len(loop_edge_masks)
     loop_edge_flags = loop_edge_masks > 0
 
-    if False:
+    if True:
         same_edge_mask = ((loop_edge_masks.unsqueeze(1) == loop_edge_masks) & (loop_edge_masks > 0)).max(-1)[0]
         # min_area = loop_masks.sum(-1).sum(-1).min()
         # area_threshold = min(min_area // 2, 50)    
@@ -360,9 +360,10 @@ def compute_loop_conflict_mask(loop_edge_masks, loop_masks, corners, edge_corner
         edge_flags = edge_confidence > 0.5
         num_good_edges = (loop_edge_flags * edge_flags).sum(-1)
         containing_mask = ((loop_edge_flags.unsqueeze(1) | loop_edge_flags) * edge_flags).sum(-1) == torch.max(num_good_edges.unsqueeze(-1), num_good_edges)
+        overlap_mask = overlap_mask | containing_mask
     else:
         loop_subset_mask = torch.stack([torch.stack([(corner_indices_1.unsqueeze(-1) == corner_indices_2).max(-1)[0].min(0)[0] for corner_indices_2 in loop_corner_indices]) for corner_indices_1 in loop_corner_indices])
-        containing_mask = torch.max(loop_subset_mask, loop_subset_mask.transpose(0, 1))
+        overlap_mask = torch.max(loop_subset_mask, loop_subset_mask.transpose(0, 1))
         pass
     # edges = corners[edge_corner]
     # edge_directions = edges[:, 1] - edges[:, 0]
@@ -378,7 +379,7 @@ def compute_loop_conflict_mask(loop_edge_masks, loop_masks, corners, edge_corner
     # print(edge_corner[loop_edge_flags[0]], edge_corner[loop_edge_flags[3]])
     # exit(1)
     intersection_mask = (((loop_edge_flags.unsqueeze(-1) * edge_intersection_mask).max(1, keepdim=True)[0] == loop_edge_flags) & loop_edge_flags).max(-1)[0]
-    conflict_mask = overlap_mask | containing_mask | intersection_mask
+    conflict_mask = overlap_mask | intersection_mask
     return conflict_mask
 
 def findMultiLoopsModule(loop_confidence, loop_info, edge_corner, num_corners, max_num_loop_corners=10, confidence_threshold=0, corners=None, disable_colinear=True, edge_pred=None):

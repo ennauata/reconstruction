@@ -608,8 +608,8 @@ class NonLocalEncoder(nn.Module):
                 #weights = loop_edge_masks * loop_pred.unsqueeze(-1)
                 edge_x_from_loop = (loop_x.unsqueeze(1) * weights.unsqueeze(-1)).sum(0) / torch.clamp(weights.sum(0).unsqueeze(-1), min=1e-4)
                 loop_x_from_edge = (edge_x * weights.unsqueeze(-1)).sum(1) / torch.clamp(weights.sum(-1).unsqueeze(-1), min=1e-4)
-                edge_x_from_conflict = (edge_conflict_mask.unsqueeze(-1) * edge_x).max(1)[0]
-                loop_x_from_conflict = (loop_conflict_mask.unsqueeze(-1) * loop_x).max(1)[0]
+                edge_x_from_conflict = (edge_conflict_mask.float().unsqueeze(-1) * edge_x).max(1)[0]
+                loop_x_from_conflict = (loop_conflict_mask.float().unsqueeze(-1) * loop_x).max(1)[0]
                 edge_xs = [edge_x, edge_x_from_loop, edge_x_from_conflict]
                 loop_xs = [loop_x, loop_x_from_edge, loop_x_from_conflict]
                 if '1d' in self.options.suffix:
@@ -1178,256 +1178,8 @@ class NonLocalModelImage(nn.Module):
         results = []
         results.append([edge_pred, loop_pred, loop_edge_masks, loop_masks, edge_mask_pred, loop_mask_pred])
         if self.options.suffix != '':
-            edge_conflict_mask = compute_edge_conflict_mask(all_edges.view((-1, 2, 2))).float()
-            loop_conflict_mask = compute_loop_conflict_mask(loop_edge_masks, loop_masks, all_corners, edge_corner, edge_pred).float()
-            #results += self.nonlocal_encoder(edge_features, loop_features, image_x, loop_edge_masks, edge_conflict_mask, loop_conflict_mask)
-            edge_directions = all_edges[:, :2] - all_edges[:, 2:]
-            edge_lengths = torch.norm(edge_directions, dim=-1, keepdim=True)
-            edge_info = torch.cat([edge_directions / torch.clamp(edge_lengths, min=1e-4), edge_lengths], dim=-1)
-            results += self.nonlocal_encoder(edge_features, loop_features, image_x, loop_edge_masks, edge_conflict_mask, loop_conflict_mask, loop_masks, loop_edge_indices, edge_info)
-            #results[0] += [edge_mask_pred, loop_mask_pred]
-            pass
-        #results = [result + [loop_masks] for result in results]
-        return image_pred, results
-
-
-class ImageMask(nn.Module):
-    def __init__(self):
-        super(ImageMask, self).__init__()
-        self.inplanes = 64
-        block = BasicBlock
-        layers = [2, 2, 2, 2]
-
-        self.image_layer_0 = nn.Sequential(nn.Conv2d(7, 64, kernel_size=7, stride=2, padding=3,
-                                                     bias=False),
-                                           nn.BatchNorm2d(64),
-                                           nn.ReLU(inplace=True),
-                                           nn.MaxPool2d(kernel_size=3, stride=2, padding=1))                
-        self.image_layer_1 = self._make_layer(block, 64, layers[0])
-        self.image_layer_2 = self._make_layer(block, 128, layers[1], stride=2)
-        self.image_layer_3 = self._make_layer(block, 256, layers[2], stride=2)
-        self.image_layer_4 = self._make_layer(block, 512, layers[3], stride=2)
-
-
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))        
-        #self.pred = nn.Sequential(nn.Linear(512, 128), nn.ReLU(), nn.Linear(, 1))
-        self.feature = LinearBlock(512, 256)        
-        self.pred = nn.Linear(256 * block.expansion, 1)
-        
-        self.decoder = Decoder(512, 1)        
-
-        self.full_scale = 256
-        self.Us = torch.arange(self.full_scale).float().cuda().repeat((self.full_scale, 1))
-        self.Vs = torch.arange(self.full_scale).float().cuda().unsqueeze(-1).repeat((1, self.full_scale))
-        self.UVs = torch.stack([self.Vs, self.Us], dim=-1).unsqueeze(-2)        
-        self.distance_threshold = 15
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-        return
-
-    def _make_layer(self, block, planes, blocks, stride=1):
-        downsample = None
-        if stride != 1 or self.inplanes != planes * block.expansion:
-            downsample = nn.Sequential(
-                conv1x1(self.inplanes, planes * block.expansion, stride),
-                nn.BatchNorm2d(planes * block.expansion),
-            )
-
-        layers = []
-        layers.append(block(self.inplanes, planes, stride, downsample))
-        self.inplanes = planes * block.expansion
-
-        for _ in range(1, blocks):
-            layers.append(block(self.inplanes, planes))
-            continue
-
-        return nn.Sequential(*layers)
-    
-    def forward(self, image, all_edges):
-        all_points = []
-        all_points_info = []
-        for edge_index, edges in enumerate(all_edges):
-            points, points_info = edge_points(self.UVs, edges, self.full_scale, distance_threshold=self.distance_threshold, return_mask=True)
-            all_points.append(points)
-            all_points_info.append(points_info)
-            continue
-        # image = (image[0, :3].detach().cpu().numpy() * 255).astype(np.uint8).transpose((1, 2, 0))
-        # cv2.imwrite('test/image.png', image)
-        # for mask_index in range(len(all_points)):
-        #     print(mask_index)
-        #     image_mask = image.copy()
-        #     mask = (all_points[mask_index].squeeze().detach().cpu().numpy() * 255).astype(np.uint8)
-        #     image_mask[mask > 128] = np.array([255, 0, 0])
-        #     cv2.imwrite('test/mask_' + str(mask_index) + '.png', image_mask)
-        #     cv2.imwrite('test/mask_' + str(mask_index) + '_offset.png', np.clip(all_points_info[mask_index][:, :, 0].detach().cpu().numpy() * 255, 0, 255).astype(np.uint8))
-        #     cv2.imwrite('test/mask_' + str(mask_index) + '_distance.png', np.clip(all_points_info[mask_index][:, :, 1].detach().cpu().numpy() * 255, 0, 255).astype(np.uint8))            
-        #     continue
-        # exit(1)
-        all_points = torch.stack(all_points, dim=0).unsqueeze(1).float()
-        all_points_info = torch.stack(all_points_info, dim=0).transpose(2, 3).transpose(1, 2).float()
-        image_x = torch.cat([image.repeat((len(all_points), 1, 1, 1)), all_points, all_points_info], dim=1)
-        image_x_0 = self.image_layer_0(image_x)
-        image_x_1 = self.image_layer_1(image_x_0)
-        image_x_2 = self.image_layer_2(image_x_1)
-        image_x_3 = self.image_layer_3(image_x_2)
-        image_x_4 = self.image_layer_4(image_x_3)
-        image_x = self.avgpool(image_x_4)
-        image_x = image_x.view((image_x.shape[0], -1))
-        edge_x = self.feature(image_x)
-        image_x = image_x.max(0, keepdim=True)[0]
-        edge_image_pred = self.decoder(image_x)        
-        edge_pred = torch.sigmoid(self.pred(edge_x)).view(-1)
-        #image_x = self.feature(image_x_4.view((len(image_x_4), -1)))
-        return edge_image_pred, image_x, edge_pred, edge_x
-    
-class MaskModel(nn.Module):
-    def __init__(self, options, num_classes=1):
-        super(MaskModel, self).__init__()
-        self.options = options
-        
-        self.edge_encoder = ImageMask()
-        self.loop_encoder = ImageMask()
-        # if '64' in self.options.suffix:
-        #     self.edge_encoder = SparseEncoderSpatial(64, 63)
-        #     self.loop_encoder = SparseEncoderSpatial(64, 63)
-        # else:
-        #     self.edge_encoder = SparseEncoderSpatial(4, 255)
-        #     self.loop_encoder = SparseEncoderSpatial(4, 255)
-        #     pass
-        #self.multi_loop_pred = SparseEncoder(4, 255)
-
-        self.nonlocal_encoder = NonLocalEncoder(options, 512)
-        self.edge_decoder = Decoder(256, 1, spatial_size=2)
-        self.loop_decoder = Decoder(256, 1, spatial_size=2)        
-
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-        return
-
-    def forward(self, image, all_corners, all_edges, corner_edge_pairs, edge_corner, mode='training'):
-        num_corners = len(all_corners)
-        
-        #image = torch.cat([image[:, :3], torch.zeros(image[:, 3:4].shape).cuda()], dim=1)
-        #cv2.imwrite('test/image.png', (image[0, :3].detach().cpu().numpy() * 255).astype(np.uint8).transpose((1, 2, 0)))
-        intermediate_results = []
-
-        #image_pred, image_x_spatial, image_x = self.image_encoder(image)
-        
-        # image = (image[0, :3].detach().cpu().numpy().transpose((1, 2, 0)) * 255).astype(np.uint8)
-        # cv2.imwrite('test/image_ori.png', image)        
-
-        # print(edge_corner)
-        # print(all_corners[edge_corner].view((-1, 4)))        
-        # print(all_edges)
-        #print(loop_edge_masks)
-        
-        #edge_pred, edge_features = self.edge_encoder(image_x_spatial, all_edges.unsqueeze(1))
-        image_pred, image_x, edge_pred, edge_features = self.edge_encoder(image, all_edges.unsqueeze(1))
-
-        #return [[edge_pred]]    
-        
-        all_loops = findLoopsModule(edge_pred, edge_corner, num_corners, max_num_loop_corners=len(all_corners), corners=all_corners, disable_colinear=True)
-
-        #loop_pred = []
-        loop_corner_indices = []
-        loop_confidence = []
-        max_confidence = max([confidence.max() for confidence, loops in all_loops])
-        for confidence, loops in all_loops:
-            for loop_index in range(len(loops)):
-                if confidence[loop_index] < min(0.5, max_confidence):
-                    continue
-                loop_corner_indices.append(loops[loop_index])                                
-                loop_confidence.append(confidence[loop_index])
-                continue
-            continue
-        loop_confidence = torch.stack(loop_confidence, dim=0)                        
-        if len(loop_corner_indices) > 1:
-            loop_subset_mask = torch.stack([torch.stack([(corner_indices_1.unsqueeze(-1) == corner_indices_2).max(-1)[0].min(0)[0] for corner_indices_2 in loop_corner_indices]) for corner_indices_1 in loop_corner_indices])
-            loop_subset_mask = torch.max(loop_subset_mask, loop_subset_mask.transpose(0, 1))
-            confidence_mask = loop_confidence.unsqueeze(-1) < loop_confidence
-            valid_indices = ((loop_subset_mask & confidence_mask).max(-1)[0] == 0).nonzero()[:, 0]
-            loop_confidence = loop_confidence[valid_indices]
-            loop_corner_indices = [loop_corner_indices[index] for index in valid_indices]
-            pass
-        
-        if len(loop_confidence) > 200:
-            #order = np.argsort([confidence.item() for confidence in loop_confidence])[::-1][:200]
-            order = np.argsort(loop_confidence)[::-1][:200]
-            np.random.shuffle(order)
-            loop_confidence = loop_confidence[order]
-            loop_corner_indices = [loop_corner_indices[index] for index in order]
-            pass
-
-        mask_size = 64
-        Us = torch.arange(mask_size).float().cuda().repeat((mask_size, 1))
-        Vs = torch.arange(mask_size).float().cuda().unsqueeze(-1).repeat((1, mask_size))
-        UVs = torch.stack([Vs, Us], dim=-1)
-    
-        
-        loop_edge_masks = []
-        loop_masks = []
-        loop_edge_indices = []
-        all_loop_edges = []
-        for loop in loop_corner_indices:
-
-            loop_corners = all_corners[loop]
-            loop_edges = torch.cat([loop_corners, torch.cat([loop_corners[-1:], loop_corners[:-1]], dim=0)], dim=-1)
-            clockwise = ((loop_edges[:, 0] - loop_edges[:, 2]) * (loop_edges[:, 1] + loop_edges[:, 3])).sum() > 0
-            if not clockwise.item():
-                reverse = torch.arange(start=len(loop) - 1, end=-1, step=-1).long()
-                loop_edges = loop_edges[reverse]
-                loop = loop[reverse]
-                pass
-            all_loop_edges.append(loop_edges)
-            
-            loop_corner_pairs = torch.cat([torch.stack([loop, torch.cat([loop[-1:], loop[:-1]], dim=0)], dim=-1), torch.stack([torch.cat([loop[-1:], loop[:-1]], dim=0), loop], dim=-1)], dim=0)
-            loop_edge_mask = (edge_corner.unsqueeze(1) == loop_corner_pairs).min(-1)[0]
-            loop_edge_masks.append(loop_edge_mask.max(-1)[0].float())
-            
-            loop_edge_mask = loop_edge_mask[:, :len(loop)] + loop_edge_mask[:, len(loop):]
-            loop_edge_indices.append(loop_edge_mask.max(0)[1])
-
-            edges = torch.stack([loop_corners, torch.cat([loop_corners[1:], loop_corners[:1]], dim=0)], dim=-2)
-            edges = edges * mask_size
-            edge_normals = edges[:, 1] - edges[:, 0]
-            edge_normals = torch.stack([edge_normals[:, 1], -edge_normals[:, 0]], dim=-1)
-            edge_normals = edge_normals / torch.clamp(torch.norm(edge_normals, dim=-1, keepdim=True), min=1e-4)
-            edge_normals = edge_normals * ((edge_normals[:, 1:2] > 0).float() * 2 - 1)
-            direction_mask = ((UVs.unsqueeze(-2) - edges[:, 0]) * edge_normals).sum(-1) > 0
-            range_mask = (UVs[:, :, 0].unsqueeze(-1) > torch.min(edges[:, 0, 0], edges[:, 1, 0])) & (UVs[:, :, 0].unsqueeze(-1) <= torch.max(edges[:, 0, 0], edges[:, 1, 0]))
-            flags = direction_mask & range_mask
-            mask = flags.sum(-1) % 2 == 1
-            loop_masks.append(mask)            
-            continue
-
-        
-        loop_info = list(zip(loop_corner_indices, loop_edge_masks, loop_masks))
-        loop_edge_masks = torch.stack(loop_edge_masks, dim=0)
-        loop_masks = torch.stack(loop_masks, dim=0)
-        #loop_pred = self.loop_pred(image_x_1_up[0], loop_corners)
-        #loop_edges = [all_edges[edge_indices] for edge_indices in loop_edge_indices]
-        #print([(edge_indices, loop_edge_masks[index].nonzero()[:, 0]) for index, edge_indices in enumerate(loop_edge_indices)])
-        #loop_edges = [all_edges[loop_edge_masks[index].nonzero()[:, 0]] for index in range(len(loop_edge_masks))]
-        #loop_edges = torch.stack(all_loop_edges, dim=0)
-        #print(all_corners)
-        #print(loop_corner_indices)
-        _, _, loop_pred, loop_features = self.loop_encoder(image, all_loop_edges)
-
-        edge_mask_pred = self.edge_decoder(edge_features)
-        loop_mask_pred = self.loop_decoder(loop_features)
-        results = []
-        results.append([edge_pred, loop_pred, loop_edge_masks, None, edge_mask_pred, loop_mask_pred])
-        if 'sharing' in self.options.suffix or 'maxpool' in self.options.suffix or 'fully' in self.options.suffix:
-            edge_conflict_mask = compute_edge_conflict_mask(all_edges.view((-1, 2, 2))).float()
-            loop_conflict_mask = compute_loop_conflict_mask(loop_edge_masks, loop_masks, all_corners, edge_corner, edge_pred, loop_corner_indices).float()
+            edge_conflict_mask = compute_edge_conflict_mask(all_edges.view((-1, 2, 2)))
+            loop_conflict_mask = compute_loop_conflict_mask(loop_edge_masks, loop_masks, all_corners, edge_corner, edge_pred, loop_corner_indices)
             #results += self.nonlocal_encoder(edge_features, loop_features, image_x, loop_edge_masks, edge_conflict_mask, loop_conflict_mask)
             edge_directions = all_edges[:, :2] - all_edges[:, 2:]
             edge_lengths = torch.norm(edge_directions, dim=-1, keepdim=True)
@@ -1437,3 +1189,251 @@ class MaskModel(nn.Module):
             pass
         #results = [result + [loop_masks] for result in results]
         return image_pred, results
+
+
+# class ImageMask(nn.Module):
+#     def __init__(self):
+#         super(ImageMask, self).__init__()
+#         self.inplanes = 64
+#         block = BasicBlock
+#         layers = [2, 2, 2, 2]
+
+#         self.image_layer_0 = nn.Sequential(nn.Conv2d(7, 64, kernel_size=7, stride=2, padding=3,
+#                                                      bias=False),
+#                                            nn.BatchNorm2d(64),
+#                                            nn.ReLU(inplace=True),
+#                                            nn.MaxPool2d(kernel_size=3, stride=2, padding=1))                
+#         self.image_layer_1 = self._make_layer(block, 64, layers[0])
+#         self.image_layer_2 = self._make_layer(block, 128, layers[1], stride=2)
+#         self.image_layer_3 = self._make_layer(block, 256, layers[2], stride=2)
+#         self.image_layer_4 = self._make_layer(block, 512, layers[3], stride=2)
+
+
+#         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))        
+#         #self.pred = nn.Sequential(nn.Linear(512, 128), nn.ReLU(), nn.Linear(, 1))
+#         self.feature = LinearBlock(512, 256)        
+#         self.pred = nn.Linear(256 * block.expansion, 1)
+        
+#         self.decoder = Decoder(512, 1)        
+
+#         self.full_scale = 256
+#         self.Us = torch.arange(self.full_scale).float().cuda().repeat((self.full_scale, 1))
+#         self.Vs = torch.arange(self.full_scale).float().cuda().unsqueeze(-1).repeat((1, self.full_scale))
+#         self.UVs = torch.stack([self.Vs, self.Us], dim=-1).unsqueeze(-2)        
+#         self.distance_threshold = 15
+#         for m in self.modules():
+#             if isinstance(m, nn.Conv2d):
+#                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+#             elif isinstance(m, nn.BatchNorm2d):
+#                 nn.init.constant_(m.weight, 1)
+#                 nn.init.constant_(m.bias, 0)
+#         return
+
+#     def _make_layer(self, block, planes, blocks, stride=1):
+#         downsample = None
+#         if stride != 1 or self.inplanes != planes * block.expansion:
+#             downsample = nn.Sequential(
+#                 conv1x1(self.inplanes, planes * block.expansion, stride),
+#                 nn.BatchNorm2d(planes * block.expansion),
+#             )
+
+#         layers = []
+#         layers.append(block(self.inplanes, planes, stride, downsample))
+#         self.inplanes = planes * block.expansion
+
+#         for _ in range(1, blocks):
+#             layers.append(block(self.inplanes, planes))
+#             continue
+
+#         return nn.Sequential(*layers)
+    
+#     def forward(self, image, all_edges):
+#         all_points = []
+#         all_points_info = []
+#         for edge_index, edges in enumerate(all_edges):
+#             points, points_info = edge_points(self.UVs, edges, self.full_scale, distance_threshold=self.distance_threshold, return_mask=True)
+#             all_points.append(points)
+#             all_points_info.append(points_info)
+#             continue
+#         # image = (image[0, :3].detach().cpu().numpy() * 255).astype(np.uint8).transpose((1, 2, 0))
+#         # cv2.imwrite('test/image.png', image)
+#         # for mask_index in range(len(all_points)):
+#         #     print(mask_index)
+#         #     image_mask = image.copy()
+#         #     mask = (all_points[mask_index].squeeze().detach().cpu().numpy() * 255).astype(np.uint8)
+#         #     image_mask[mask > 128] = np.array([255, 0, 0])
+#         #     cv2.imwrite('test/mask_' + str(mask_index) + '.png', image_mask)
+#         #     cv2.imwrite('test/mask_' + str(mask_index) + '_offset.png', np.clip(all_points_info[mask_index][:, :, 0].detach().cpu().numpy() * 255, 0, 255).astype(np.uint8))
+#         #     cv2.imwrite('test/mask_' + str(mask_index) + '_distance.png', np.clip(all_points_info[mask_index][:, :, 1].detach().cpu().numpy() * 255, 0, 255).astype(np.uint8))            
+#         #     continue
+#         # exit(1)
+#         all_points = torch.stack(all_points, dim=0).unsqueeze(1).float()
+#         all_points_info = torch.stack(all_points_info, dim=0).transpose(2, 3).transpose(1, 2).float()
+#         image_x = torch.cat([image.repeat((len(all_points), 1, 1, 1)), all_points, all_points_info], dim=1)
+#         image_x_0 = self.image_layer_0(image_x)
+#         image_x_1 = self.image_layer_1(image_x_0)
+#         image_x_2 = self.image_layer_2(image_x_1)
+#         image_x_3 = self.image_layer_3(image_x_2)
+#         image_x_4 = self.image_layer_4(image_x_3)
+#         image_x = self.avgpool(image_x_4)
+#         image_x = image_x.view((image_x.shape[0], -1))
+#         edge_x = self.feature(image_x)
+#         image_x = image_x.max(0, keepdim=True)[0]
+#         edge_image_pred = self.decoder(image_x)        
+#         edge_pred = torch.sigmoid(self.pred(edge_x)).view(-1)
+#         #image_x = self.feature(image_x_4.view((len(image_x_4), -1)))
+#         return edge_image_pred, image_x, edge_pred, edge_x
+    
+# class MaskModel(nn.Module):
+#     def __init__(self, options, num_classes=1):
+#         super(MaskModel, self).__init__()
+#         self.options = options
+        
+#         self.edge_encoder = ImageMask()
+#         self.loop_encoder = ImageMask()
+#         # if '64' in self.options.suffix:
+#         #     self.edge_encoder = SparseEncoderSpatial(64, 63)
+#         #     self.loop_encoder = SparseEncoderSpatial(64, 63)
+#         # else:
+#         #     self.edge_encoder = SparseEncoderSpatial(4, 255)
+#         #     self.loop_encoder = SparseEncoderSpatial(4, 255)
+#         #     pass
+#         #self.multi_loop_pred = SparseEncoder(4, 255)
+
+#         self.nonlocal_encoder = NonLocalEncoder(options, 512)
+#         self.edge_decoder = Decoder(256, 1, spatial_size=2)
+#         self.loop_decoder = Decoder(256, 1, spatial_size=2)        
+
+#         for m in self.modules():
+#             if isinstance(m, nn.Conv2d):
+#                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+#             elif isinstance(m, nn.BatchNorm2d):
+#                 nn.init.constant_(m.weight, 1)
+#                 nn.init.constant_(m.bias, 0)
+#         return
+
+#     def forward(self, image, all_corners, all_edges, corner_edge_pairs, edge_corner, mode='training'):
+#         num_corners = len(all_corners)
+        
+#         #image = torch.cat([image[:, :3], torch.zeros(image[:, 3:4].shape).cuda()], dim=1)
+#         #cv2.imwrite('test/image.png', (image[0, :3].detach().cpu().numpy() * 255).astype(np.uint8).transpose((1, 2, 0)))
+#         intermediate_results = []
+
+#         #image_pred, image_x_spatial, image_x = self.image_encoder(image)
+        
+#         # image = (image[0, :3].detach().cpu().numpy().transpose((1, 2, 0)) * 255).astype(np.uint8)
+#         # cv2.imwrite('test/image_ori.png', image)        
+
+#         # print(edge_corner)
+#         # print(all_corners[edge_corner].view((-1, 4)))        
+#         # print(all_edges)
+#         #print(loop_edge_masks)
+        
+#         #edge_pred, edge_features = self.edge_encoder(image_x_spatial, all_edges.unsqueeze(1))
+#         image_pred, image_x, edge_pred, edge_features = self.edge_encoder(image, all_edges.unsqueeze(1))
+
+#         #return [[edge_pred]]    
+        
+#         all_loops = findLoopsModule(edge_pred, edge_corner, num_corners, max_num_loop_corners=len(all_corners), corners=all_corners, disable_colinear=True)
+
+#         #loop_pred = []
+#         loop_corner_indices = []
+#         loop_confidence = []
+#         max_confidence = max([confidence.max() for confidence, loops in all_loops])
+#         for confidence, loops in all_loops:
+#             for loop_index in range(len(loops)):
+#                 if confidence[loop_index] < min(0.5, max_confidence):
+#                     continue
+#                 loop_corner_indices.append(loops[loop_index])                                
+#                 loop_confidence.append(confidence[loop_index])
+#                 continue
+#             continue
+#         loop_confidence = torch.stack(loop_confidence, dim=0)                        
+#         if len(loop_corner_indices) > 1:
+#             loop_subset_mask = torch.stack([torch.stack([(corner_indices_1.unsqueeze(-1) == corner_indices_2).max(-1)[0].min(0)[0] for corner_indices_2 in loop_corner_indices]) for corner_indices_1 in loop_corner_indices])
+#             loop_subset_mask = torch.max(loop_subset_mask, loop_subset_mask.transpose(0, 1))
+#             confidence_mask = loop_confidence.unsqueeze(-1) < loop_confidence
+#             valid_indices = ((loop_subset_mask & confidence_mask).max(-1)[0] == 0).nonzero()[:, 0]
+#             loop_confidence = loop_confidence[valid_indices]
+#             loop_corner_indices = [loop_corner_indices[index] for index in valid_indices]
+#             pass
+        
+#         if len(loop_confidence) > 200:
+#             #order = np.argsort([confidence.item() for confidence in loop_confidence])[::-1][:200]
+#             order = np.argsort(loop_confidence)[::-1][:200]
+#             np.random.shuffle(order)
+#             loop_confidence = loop_confidence[order]
+#             loop_corner_indices = [loop_corner_indices[index] for index in order]
+#             pass
+
+#         mask_size = 64
+#         Us = torch.arange(mask_size).float().cuda().repeat((mask_size, 1))
+#         Vs = torch.arange(mask_size).float().cuda().unsqueeze(-1).repeat((1, mask_size))
+#         UVs = torch.stack([Vs, Us], dim=-1)
+    
+        
+#         loop_edge_masks = []
+#         loop_masks = []
+#         loop_edge_indices = []
+#         all_loop_edges = []
+#         for loop in loop_corner_indices:
+
+#             loop_corners = all_corners[loop]
+#             loop_edges = torch.cat([loop_corners, torch.cat([loop_corners[-1:], loop_corners[:-1]], dim=0)], dim=-1)
+#             clockwise = ((loop_edges[:, 0] - loop_edges[:, 2]) * (loop_edges[:, 1] + loop_edges[:, 3])).sum() > 0
+#             if not clockwise.item():
+#                 reverse = torch.arange(start=len(loop) - 1, end=-1, step=-1).long()
+#                 loop_edges = loop_edges[reverse]
+#                 loop = loop[reverse]
+#                 pass
+#             all_loop_edges.append(loop_edges)
+            
+#             loop_corner_pairs = torch.cat([torch.stack([loop, torch.cat([loop[-1:], loop[:-1]], dim=0)], dim=-1), torch.stack([torch.cat([loop[-1:], loop[:-1]], dim=0), loop], dim=-1)], dim=0)
+#             loop_edge_mask = (edge_corner.unsqueeze(1) == loop_corner_pairs).min(-1)[0]
+#             loop_edge_masks.append(loop_edge_mask.max(-1)[0].float())
+            
+#             loop_edge_mask = loop_edge_mask[:, :len(loop)] + loop_edge_mask[:, len(loop):]
+#             loop_edge_indices.append(loop_edge_mask.max(0)[1])
+
+#             edges = torch.stack([loop_corners, torch.cat([loop_corners[1:], loop_corners[:1]], dim=0)], dim=-2)
+#             edges = edges * mask_size
+#             edge_normals = edges[:, 1] - edges[:, 0]
+#             edge_normals = torch.stack([edge_normals[:, 1], -edge_normals[:, 0]], dim=-1)
+#             edge_normals = edge_normals / torch.clamp(torch.norm(edge_normals, dim=-1, keepdim=True), min=1e-4)
+#             edge_normals = edge_normals * ((edge_normals[:, 1:2] > 0).float() * 2 - 1)
+#             direction_mask = ((UVs.unsqueeze(-2) - edges[:, 0]) * edge_normals).sum(-1) > 0
+#             range_mask = (UVs[:, :, 0].unsqueeze(-1) > torch.min(edges[:, 0, 0], edges[:, 1, 0])) & (UVs[:, :, 0].unsqueeze(-1) <= torch.max(edges[:, 0, 0], edges[:, 1, 0]))
+#             flags = direction_mask & range_mask
+#             mask = flags.sum(-1) % 2 == 1
+#             loop_masks.append(mask)            
+#             continue
+
+        
+#         loop_info = list(zip(loop_corner_indices, loop_edge_masks, loop_masks))
+#         loop_edge_masks = torch.stack(loop_edge_masks, dim=0)
+#         loop_masks = torch.stack(loop_masks, dim=0)
+#         #loop_pred = self.loop_pred(image_x_1_up[0], loop_corners)
+#         #loop_edges = [all_edges[edge_indices] for edge_indices in loop_edge_indices]
+#         #print([(edge_indices, loop_edge_masks[index].nonzero()[:, 0]) for index, edge_indices in enumerate(loop_edge_indices)])
+#         #loop_edges = [all_edges[loop_edge_masks[index].nonzero()[:, 0]] for index in range(len(loop_edge_masks))]
+#         #loop_edges = torch.stack(all_loop_edges, dim=0)
+#         #print(all_corners)
+#         #print(loop_corner_indices)
+#         _, _, loop_pred, loop_features = self.loop_encoder(image, all_loop_edges)
+
+#         edge_mask_pred = self.edge_decoder(edge_features)
+#         loop_mask_pred = self.loop_decoder(loop_features)
+#         results = []
+#         results.append([edge_pred, loop_pred, loop_edge_masks, None, edge_mask_pred, loop_mask_pred])
+#         if 'sharing' in self.options.suffix or 'maxpool' in self.options.suffix or 'fully' in self.options.suffix:
+#             edge_conflict_mask = compute_edge_conflict_mask(all_edges.view((-1, 2, 2))).float()
+#             loop_conflict_mask = compute_loop_conflict_mask(loop_edge_masks, loop_masks, all_corners, edge_corner, edge_pred, loop_corner_indices).float()
+#             #results += self.nonlocal_encoder(edge_features, loop_features, image_x, loop_edge_masks, edge_conflict_mask, loop_conflict_mask)
+#             edge_directions = all_edges[:, :2] - all_edges[:, 2:]
+#             edge_lengths = torch.norm(edge_directions, dim=-1, keepdim=True)
+#             edge_info = torch.cat([edge_directions / torch.clamp(edge_lengths, min=1e-4), edge_lengths], dim=-1)
+#             results += self.nonlocal_encoder(edge_features, loop_features, image_x, loop_edge_masks, edge_conflict_mask, loop_conflict_mask, loop_edge_indices, edge_info)
+#             #results[0] += [edge_mask_pred, loop_mask_pred]
+#             pass
+#         #results = [result + [loop_masks] for result in results]
+#         return image_pred, results
