@@ -55,20 +55,21 @@ def main(options):
     ############################################# Setup Training #################################################
     ##############################################################################################################
     PREFIX = options.data_path
-    with open('{}/train_list.txt'.format(PREFIX)) as f:
+    with open('{}/train_list_V2.txt'.format(PREFIX)) as f:
         file_list = [line.strip() for line in f.readlines()]
         train_list = file_list
         # train_list = file_list[:-50]
         # valid_list = file_list[-50:]
         pass
 
-    with open('{}/valid_list.txt'.format(PREFIX)) as f:
+    with open('{}/valid_list_V2.txt'.format(PREFIX)) as f:
         valid_list = [line.strip() for line in f.readlines()]
         pass
 
-    train_list = train_list + valid_list[:-100]    
-    valid_list = valid_list[-100:]
-    #valid_list = train_list[:10]
+    # train_list = train_list + valid_list[:-100]    
+    # valid_list = valid_list[-100:]
+    train_list = file_list[:10]
+    valid_list = file_list[:10]
     
     best_score = 0.0
     mt = Metrics()
@@ -300,9 +301,9 @@ def main(options):
                 torch.save(model.state_dict(), options.checkpoint_dir + '/loop_checkpoint_{}_epoch_{}.pth'.format(options.suffix, epoch))
                 torch.save(optimizer.state_dict(), options.checkpoint_dir + '/loop_optim_{}_epoch_{}.pth'.format(options.suffix, epoch))
 
-            with torch.no_grad():
-                testOneEpoch(options, model, dset_val) 
-                pass
+            # with torch.no_grad():
+            #     testOneEpoch(options, model, dset_val) 
+            #     pass
             continue
         continue
     return

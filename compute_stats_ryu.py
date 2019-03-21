@@ -96,7 +96,7 @@ def main(options):
 		building.edge_det = building_ryu.edge_det
 		building.edge_corner = building_ryu.edge_corner
 		metrics.forward(building)
-
+		
 		# draw images
 		if np.array(building_ryu.corners_det).shape[0] > 0:
 			corner_annot, corner_masks = building.compute_corner_image(np.array(building_ryu.corners_det).astype('int'))
