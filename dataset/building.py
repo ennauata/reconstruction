@@ -938,8 +938,9 @@ class Building():
             new_size = min(max_range, size) + max(size - max_range, 0) * np.random.random()
             #new_size = size
         else:
-            new_size = max_range
+            #new_size = max_range
             #new_size = size
+            new_size = min((size + max_range) / 2, size)
             pass
         scale = float(new_size) / max_range
         if self.with_augmentation:

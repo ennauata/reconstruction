@@ -30,8 +30,9 @@ def edge_points(UVs, edges, size, distance_threshold=3, return_mask=False):
     all_edge_mask = (normal_distances <= distance_threshold) & (direction_distances <= 1) & (direction_distances >= 0) | (torch.norm(UVs - edges[:, :2], dim=-1) <= distance_threshold) | (torch.norm(UVs - edges[:, 2:4], dim=-1) <= distance_threshold)
     edge_mask = all_edge_mask.max(-1)[0]
     edge_info = torch.cat([directions, lengths.unsqueeze(-1)], dim=-1)
-    point_offsets = torch.min(direction_distances, 1 - direction_distances)
-    points_info = torch.stack([point_offsets, normal_distances / distance_threshold], dim=-1)
+    point_offsets = torch.max(direction_distances, 1 - direction_distances)
+    #points_info = torch.stack([point_offsets, normal_distances / distance_threshold], dim=-1)
+    points_info = torch.stack([point_offsets, 1 - normal_distances / distance_threshold], dim=-1)
     #points_info = torch.cat([point_offsets.unsqueeze(-1), edge_info.repeat((len(direction_distances), len(direction_distances), 1, 1))], dim=-1)
     #points_info = point_offsets.unsqueeze(-1)
     points_info = (points_info * all_edge_mask.float().unsqueeze(-1)).sum(-2) / torch.clamp(all_edge_mask.float().unsqueeze(-1).sum(-2), min=1e-4)
@@ -288,8 +289,8 @@ class SparseEncoderSpatial(nn.Module):
 
         
         self.distance_threshold = 5 if full_scale <= 64 else (7 if full_scale <= 128 else 15)
-        scales = [2, 4, 8, 16] if full_scale <= 64 else ([1, 2, 4] if full_scale <= 128 else [1, 2, 3, 4, 5])
-        output_spatial_size = 3 if full_scale <= 64 else (3 if full_scale <= 128 else 7)
+        scales = [2, 4, 8, 16] if full_scale <= 64 else ([1, 2, 4] if full_scale <= 128 else [1, 2, 3, 4, 5, 8])
+        output_spatial_size = 3 if full_scale <= 64 else (3 if full_scale <= 128 else 1)
         #output_spatial_size = 3
         
         blocks = [['b', m * k, 2, 2] for k in scales]
@@ -297,7 +298,7 @@ class SparseEncoderSpatial(nn.Module):
         self.sparse_model = scn.Sequential().add(
             scn.InputLayer(dimension, full_scale, mode=4)).add(
             scn.SubmanifoldConvolution(dimension, num_input_channels + 2, m, 3, False)).add(
-            #scn.MaxPooling(dimension, 3, 2)).add(
+            scn.MaxPooling(dimension, 3, 2)).add(
             scn.SparseResNet(dimension, m, blocks)).add(
             scn.BatchNormReLU(num_final_channels)).add(
             scn.SparseToDense(dimension, num_final_channels))
@@ -307,7 +308,7 @@ class SparseEncoderSpatial(nn.Module):
         self.Vs = torch.arange(full_scale).float().cuda().unsqueeze(-1).repeat((1, full_scale))
         self.UVs = torch.stack([self.Vs, self.Us], dim=-1).unsqueeze(-2)
 
-        self.spatial_to_feature = LinearBlock(num_final_channels * output_spatial_size * output_spatial_size, 256)
+        #self.spatial_to_feature = LinearBlock(num_final_channels * output_spatial_size * output_spatial_size, 256)
         self.pred = nn.Sequential(nn.Linear(256, 64), nn.ReLU(), nn.Linear(64, 1))        
         
         return
@@ -337,180 +338,181 @@ class SparseEncoderSpatial(nn.Module):
         x = self.sparse_model((coords, image_features))
 
         x = x.view((x.shape[0], -1))
-        x = self.spatial_to_feature(x)
+        #x = self.spatial_to_feature(x)
         
         pred = torch.sigmoid(self.pred(x)).view(-1)
 
         return pred, x
 
 
-class SparseEncoderSpatialDebug(nn.Module):
-    def __init__(self, num_input_channels, full_scale=256):
-        super(SparseEncoderSpatialDebug, self).__init__()
+# class SparseEncoderSpatialDebug(nn.Module):
+#     def __init__(self, num_input_channels, full_scale=256):
+#         super(SparseEncoderSpatialDebug, self).__init__()
 
-        dimension = 2        
-        m = 32
-        residual_blocks = True
-        block_reps = 2
-        self.full_scale = full_scale
-        self.density = full_scale
+#         dimension = 2        
+#         m = 32
+#         residual_blocks = True
+#         block_reps = 2
+#         self.full_scale = full_scale
+#         self.density = full_scale
 
         
-        self.distance_threshold = 5 if full_scale <= 64 else (7 if full_scale <= 128 else 15)
-        scales = [2, 4, 8, 16] if full_scale <= 64 else ([1, 2, 4] if full_scale <= 128 else [1, 2, 3, 4])
-        #output_spatial_size = 1 if full_scale <= 64 else (3 if full_scale <= 128 else 7)
-        output_spatial_size = 3
+#         self.distance_threshold = 5 if full_scale <= 64 else (7 if full_scale <= 128 else 15)
+#         scales = [2, 4, 8, 16] if full_scale <= 64 else ([1, 2, 4] if full_scale <= 128 else [1, 2, 3, 4])
+#         #output_spatial_size = 1 if full_scale <= 64 else (3 if full_scale <= 128 else 7)
+#         output_spatial_size = 3
         
-        blocks = [['b', m * k, 2, 2] for k in scales]
-        num_final_channels = m * scales[-1]
-        self.sparse_model = scn.Sequential().add(
-            scn.InputLayer(dimension, full_scale, mode=4)).add(
-            # scn.SubmanifoldConvolution(dimension, num_input_channels, m, 3, False)).add(
-            # #scn.MaxPooling(dimension, 3, 2)).add(
-            # scn.SparseResNet(dimension, m, blocks)).add(
-            # scn.BatchNormReLU(num_final_channels)).add(
-            scn.SparseToDense(dimension, num_input_channels))
+#         blocks = [['b', m * k, 2, 2] for k in scales]
+#         num_final_channels = m * scales[-1]
+#         self.sparse_model = scn.Sequential().add(
+#             scn.InputLayer(dimension, full_scale, mode=4)).add(
+#             # scn.SubmanifoldConvolution(dimension, num_input_channels, m, 3, False)).add(
+#             # #scn.MaxPooling(dimension, 3, 2)).add(
+#             # scn.SparseResNet(dimension, m, blocks)).add(
+#             # scn.BatchNormReLU(num_final_channels)).add(
+#             scn.SparseToDense(dimension, num_input_channels))
 
-        self.Us = torch.arange(full_scale).float().cuda().repeat((full_scale, 1))
-        self.Vs = torch.arange(full_scale).float().cuda().unsqueeze(-1).repeat((1, full_scale))
-        self.UVs = torch.stack([self.Vs, self.Us], dim=-1).unsqueeze(-2)
+#         self.Us = torch.arange(full_scale).float().cuda().repeat((full_scale, 1))
+#         self.Vs = torch.arange(full_scale).float().cuda().unsqueeze(-1).repeat((1, full_scale))
+#         self.UVs = torch.stack([self.Vs, self.Us], dim=-1).unsqueeze(-2)
 
-        self.spatial_to_feature = LinearBlock(num_final_channels * output_spatial_size * output_spatial_size, 256)
-        self.pred = nn.Sequential(nn.Linear(256, 64), nn.ReLU(), nn.Linear(64, 1))        
+#         self.spatial_to_feature = LinearBlock(num_final_channels * output_spatial_size * output_spatial_size, 256)
+#         self.pred = nn.Sequential(nn.Linear(256, 64), nn.ReLU(), nn.Linear(64, 1))        
         
-        return
+#         return
 
-    def forward(self, image_x, all_edges):
-        all_points = []
-        all_indices = []
-        for edge_index, edges in enumerate(all_edges):
-            points, points_info = edge_points(self.UVs, edges, self.full_scale, distance_threshold=self.distance_threshold)
-            all_points.append(points)
-            all_indices.append(torch.full((len(points), 1), edge_index).cuda().long())
-            continue
+#     def forward(self, image_x, all_edges):
+#         all_points = []
+#         all_indices = []
+#         for edge_index, edges in enumerate(all_edges):
+#             points, points_info = edge_points(self.UVs, edges, self.full_scale, distance_threshold=self.distance_threshold)
+#             all_points.append(points)
+#             all_indices.append(torch.full((len(points), 1), edge_index).cuda().long())
+#             continue
 
-        debug_points = list(zip(all_points, all_indices))
-        all_points = torch.cat(all_points, dim=0)        
-        coords = torch.cat([all_points, torch.cat(all_indices, dim=0)], dim=-1)
+#         debug_points = list(zip(all_points, all_indices))
+#         all_points = torch.cat(all_points, dim=0)        
+#         coords = torch.cat([all_points, torch.cat(all_indices, dim=0)], dim=-1)
 
-        all_points = all_points.float() / self.full_scale * 2 - 1
-        all_points = torch.stack([all_points[:, 1], all_points[:, 0]], dim=-1)        
-        all_points = all_points.unsqueeze(0).unsqueeze(0)
-        image_features = torch.nn.functional.grid_sample(image_x, all_points)
-        image_features = image_features.view(image_x.shape[1], -1).transpose(0, 1)
-        x = self.sparse_model((coords, image_features))
+#         all_points = all_points.float() / self.full_scale * 2 - 1
+#         all_points = torch.stack([all_points[:, 1], all_points[:, 0]], dim=-1)        
+#         all_points = all_points.unsqueeze(0).unsqueeze(0)
+#         image_features = torch.nn.functional.grid_sample(image_x, all_points)
+#         image_features = image_features.view(image_x.shape[1], -1).transpose(0, 1)
+#         x = self.sparse_model((coords, image_features))
 
 
-        # print(all_points.min(), all_points.max())
-        # image = (image_x[0].detach().cpu().numpy()[:3].transpose((1, 2, 0)) * 255).astype(np.uint8)
-        # for edge in (all_edges.detach().cpu().numpy().reshape((-1, 4)) * 256).round().astype(np.int32):
-        #     #cv2.line(image, (edge[1], edge[0]), (edge[3], edge[2]), thickness=1, color=(0, 0, 255))
-        #     continue
-        # cv2.imwrite('test/image.png', image)
-        # print(x.shape)
-        # for mask_index, mask in enumerate((x.detach().cpu().numpy()[:, :3].transpose((0, 2, 3, 1)) * 255).astype(np.uint8)):
-        #     print((all_edges[mask_index] * 256).long(), debug_points[mask_index][0].shape, mask.max())
-        #     print((coords[:, 2] == mask_index).sum())            
-        #     cv2.imwrite('test/mask_' + str(mask_index) + '.png', mask)
-        #     continue
-        # exit(1)
+#         # print(all_points.min(), all_points.max())
+#         # image = (image_x[0].detach().cpu().numpy()[:3].transpose((1, 2, 0)) * 255).astype(np.uint8)
+#         # for edge in (all_edges.detach().cpu().numpy().reshape((-1, 4)) * 256).round().astype(np.int32):
+#         #     #cv2.line(image, (edge[1], edge[0]), (edge[3], edge[2]), thickness=1, color=(0, 0, 255))
+#         #     continue
+#         # cv2.imwrite('test/image.png', image)
+#         # print(x.shape)
+#         # for mask_index, mask in enumerate((x.detach().cpu().numpy()[:, :3].transpose((0, 2, 3, 1)) * 255).astype(np.uint8)):
+#         #     print((all_edges[mask_index] * 256).long(), debug_points[mask_index][0].shape, mask.max())
+#         #     print((coords[:, 2] == mask_index).sum())            
+#         #     cv2.imwrite('test/mask_' + str(mask_index) + '.png', mask)
+#         #     continue
+#         # exit(1)
         
-        image = image_x[0].detach().cpu().numpy().mean(0)
-        image = (image / image.max(0) * 255).astype(np.uint8)
-        image = np.stack([image, image, image], axis=-1)
-        # for edge in (all_edges.detach().cpu().numpy().reshape((-1, 4)) * 64).round().astype(np.int32):
-        #     cv2.line(image, (edge[1], edge[0]), (edge[3], edge[2]), thickness=1, color=(0, 0, 255))
-        #     continue
-        cv2.imwrite('test/image.png', image)
-        for mask_index, mask in enumerate(x.detach().cpu().numpy().mean(1)):
-            print(mask.sum() / len(debug_points[mask_index][0]))
-            mask = (mask / np.maximum(mask.max(0), 1e-4) * 255).astype(np.uint8)            
-            cv2.imwrite('test/mask_' + str(mask_index) + '.png', mask)
-            continue
-        #print(image_x[0].mean(0)[29, 37])
-        torch.save((all_points, image_x, coords, image_features), 'test/debug.pth')
-        exit(1)
+#         image = image_x[0].detach().cpu().numpy().mean(0)
+#         image = (image / image.max(0) * 255).astype(np.uint8)
+#         image = np.stack([image, image, image], axis=-1)
+#         # for edge in (all_edges.detach().cpu().numpy().reshape((-1, 4)) * 64).round().astype(np.int32):
+#         #     cv2.line(image, (edge[1], edge[0]), (edge[3], edge[2]), thickness=1, color=(0, 0, 255))
+#         #     continue
+#         cv2.imwrite('test/image.png', image)
+#         for mask_index, mask in enumerate(x.detach().cpu().numpy().mean(1)):
+#             print(mask.sum() / len(debug_points[mask_index][0]))
+#             mask = (mask / np.maximum(mask.max(0), 1e-4) * 255).astype(np.uint8)            
+#             cv2.imwrite('test/mask_' + str(mask_index) + '.png', mask)
+#             continue
+#         #print(image_x[0].mean(0)[29, 37])
+#         torch.save((all_points, image_x, coords, image_features), 'test/debug.pth')
+#         exit(1)
 
-        x = x.view((x.shape[0], -1))
-        x = self.spatial_to_feature(x)
+#         x = x.view((x.shape[0], -1))
+#         x = self.spatial_to_feature(x)
         
-        pred = torch.sigmoid(self.pred(x)).view(-1)
+#         pred = torch.sigmoid(self.pred(x)).view(-1)
 
-        return pred, x    
+#         return pred, x    
 
-class SparseEncoder(nn.Module):
-    def __init__(self, num_input_channels, full_scale=256):
-        super(SparseEncoder, self).__init__()
+# class SparseEncoder(nn.Module):
+#     def __init__(self, num_input_channels, full_scale=256):
+#         super(SparseEncoder, self).__init__()
 
-        dimension = 2        
-        m = 32
-        residual_blocks = True
-        block_reps = 2
-        self.full_scale = full_scale
+#         dimension = 2        
+#         m = 32
+#         residual_blocks = True
+#         block_reps = 2
+#         self.full_scale = full_scale
         
-        self.distance_threshold = 3 if full_scale <= 64 else (7 if full_scale <= 128 else 15)
-        scales = [2, 4, 8, 16, 32] if full_scale <= 64 else ([1, 2, 3, 4, 5] if full_scale <= 128 else [1, 2, 3, 4, 5, 6, 7])
-        #output_spatial_size = 1 if full_scale <= 64 else (3 if full_scale <= 128 else 7)
+#         self.distance_threshold = 3 if full_scale <= 64 else (7 if full_scale <= 128 else 15)
+#         scales = [2, 4, 8, 16, 32] if full_scale <= 64 else ([1, 2, 3, 4, 5] if full_scale <= 128 else [1, 2, 3, 4, 5, 6, 7])
+#         #output_spatial_size = 1 if full_scale <= 64 else (3 if full_scale <= 128 else 7)
         
-        blocks = [['b', m * k, 2, 2] for k in scales]
-        num_final_channels = m * scales[-1]
-        self.sparse_model = scn.Sequential().add(
-            scn.InputLayer(dimension, full_scale, mode=4)).add(
-            scn.SubmanifoldConvolution(dimension, num_input_channels, m, 3, False)).add(
-            #scn.MaxPooling(dimension, 3, 2)).add(
-            scn.SparseResNet(dimension, m, blocks)).add(
-            scn.BatchNormReLU(num_final_channels)).add(
-            scn.SparseToDense(dimension, num_final_channels))
+#         blocks = [['b', m * k, 2, 2] for k in scales]
+#         num_final_channels = m * scales[-1]
+#         self.sparse_model = scn.Sequential().add(
+#             scn.InputLayer(dimension, full_scale, mode=4)).add(
+#             scn.SubmanifoldConvolution(dimension, num_input_channels, m, 3, False)).add(
+#             #scn.MaxPooling(dimension, 3, 2)).add(
+#             scn.SparseResNet(dimension, m, blocks)).add(
+#             scn.BatchNormReLU(num_final_channels)).add(
+#             scn.SparseToDense(dimension, num_final_channels))
 
-        self.pred = nn.Sequential(nn.Linear(num_final_channels, 64), nn.ReLU(), nn.Linear(64, 1))
+#         self.pred = nn.Sequential(nn.Linear(num_final_channels, 64), nn.ReLU(), nn.Linear(64, 1))
 
-        self.decoder = nn.Sequential(ConvBlock(num_final_channels, 128, kernel_size=4, stride=2, padding=1, mode='deconv'),
-                                     ConvBlock(128, 64, kernel_size=4, stride=2, padding=1, mode='deconv'), 
-                                     ConvBlock(64, 64, kernel_size=4, stride=2, padding=1, mode='deconv'), 
-                                     ConvBlock(64, 32, kernel_size=4, stride=2, padding=1, mode='deconv'), 
-                                     ConvBlock(32, 32, kernel_size=4, stride=2, padding=1, mode='deconv'), 
-                                     nn.ConvTranspose2d(32, 1, kernel_size=4, stride=2, padding=1))
+#         self.decoder = nn.Sequential(ConvBlock(num_final_channels, 128, kernel_size=4, stride=2, padding=1, mode='deconv'),
+#                                      ConvBlock(128, 64, kernel_size=4, stride=2, padding=1, mode='deconv'), 
+#                                      ConvBlock(64, 64, kernel_size=4, stride=2, padding=1, mode='deconv'), 
+#                                      ConvBlock(64, 32, kernel_size=4, stride=2, padding=1, mode='deconv'), 
+#                                      ConvBlock(32, 32, kernel_size=4, stride=2, padding=1, mode='deconv'), 
+#                                      nn.ConvTranspose2d(32, 1, kernel_size=4, stride=2, padding=1))
                                      
-        self.density = full_scale
+#         self.density = full_scale
 
-        self.Us = torch.arange(full_scale).float().cuda().repeat((full_scale, 1))
-        self.Vs = torch.arange(full_scale).float().cuda().unsqueeze(-1).repeat((1, full_scale))
-        self.UVs = torch.stack([self.Vs, self.Us], dim=-1).unsqueeze(-2)
-        return
+#         self.Us = torch.arange(full_scale).float().cuda().repeat((full_scale, 1))
+#         self.Vs = torch.arange(full_scale).float().cuda().unsqueeze(-1).repeat((1, full_scale))
+#         self.UVs = torch.stack([self.Vs, self.Us], dim=-1).unsqueeze(-2)
+#         return
 
-    def forward(self, image_x, all_edges):
-        all_points = []
-        all_indices = []
-        for edge_index, edges in enumerate(all_edges):
-            points = edge_points(self.UVs, edges, self.full_scale, distance_threshold=self.distance_threshold)
-            all_points.append(points)
-            all_indices.append(torch.full((len(points), 1), edge_index).cuda().long())
-            continue
+#     def forward(self, image_x, all_edges):
+#         all_points = []
+#         all_indices = []
+#         for edge_index, edges in enumerate(all_edges):
+#             points = edge_points(self.UVs, edges, self.full_scale, distance_threshold=self.distance_threshold)
+#             all_points.append(points)
+#             all_indices.append(torch.full((len(points), 1), edge_index).cuda().long())
+#             continue
 
-        all_points = torch.cat(all_points, dim=0)        
-        coords = torch.cat([all_points, torch.cat(all_indices, dim=0)], dim=-1)
+#         all_points = torch.cat(all_points, dim=0)        
+#         coords = torch.cat([all_points, torch.cat(all_indices, dim=0)], dim=-1)
 
-        all_points = all_points.float() / self.full_scale * 2 - 1
-        all_points = torch.stack([all_points[:, 1], all_points[:, 0]], dim=-1)        
-        all_points = all_points.unsqueeze(0).unsqueeze(0)
-        image_features = torch.nn.functional.grid_sample(image_x, all_points)
-        image_features = image_features.view(image_x.shape[1], -1).transpose(0, 1)
-        x = self.sparse_model((coords, image_features))
+#         all_points = all_points.float() / self.full_scale * 2 - 1
+#         all_points = torch.stack([all_points[:, 1], all_points[:, 0]], dim=-1)        
+#         all_points = all_points.unsqueeze(0).unsqueeze(0)
+#         image_features = torch.nn.functional.grid_sample(image_x, all_points)
+#         image_features = image_features.view(image_x.shape[1], -1).transpose(0, 1)
+#         x = self.sparse_model((coords, image_features))
 
-        # image = (image_x[0, :3].detach().cpu().numpy().transpose((1, 2, 0)) * 255).astype(np.uint8)
-        # # for edge in (all_edges.detach().cpu().numpy().reshape((-1, 4)) * 256).round().astype(np.int32):
-        # #     print(edge, image.shape, image.dtype)
-        # #     cv2.line(image, (edge[1], edge[0]), (edge[3], edge[2]), thickness=3, color=(0, 0, 255))
-        # #     continue
-        # cv2.imwrite('test/image.png', image)
-        # for mask_index, mask in enumerate((x[:, :3].detach().cpu().numpy().transpose((0, 2, 3, 1)) * 255).astype(np.uint8)):
-        #     cv2.imwrite('test/mask_' + str(mask_index) + '.png', mask)
-        #     continue
-        # exit(1)
-        mask_pred = torch.sigmoid(self.decoder(x)).squeeze(1)
-        x = x.view((x.shape[0], -1))
-        pred = torch.sigmoid(self.pred(x)).view(-1)
-        return pred, mask_pred, x    
+#         # image = (image_x[0, :3].detach().cpu().numpy().transpose((1, 2, 0)) * 255).astype(np.uint8)
+#         # # for edge in (all_edges.detach().cpu().numpy().reshape((-1, 4)) * 256).round().astype(np.int32):
+#         # #     print(edge, image.shape, image.dtype)
+#         # #     cv2.line(image, (edge[1], edge[0]), (edge[3], edge[2]), thickness=3, color=(0, 0, 255))
+#         # #     continue
+#         # cv2.imwrite('test/image.png', image)
+#         # for mask_index, mask in enumerate((x[:, :3].detach().cpu().numpy().transpose((0, 2, 3, 1)) * 255).astype(np.uint8)):
+#         #     cv2.imwrite('test/mask_' + str(mask_index) + '.png', mask)
+#         #     continue
+#         # exit(1)
+#         mask_pred = torch.sigmoid(self.decoder(x)).squeeze(1)
+#         x = x.view((x.shape[0], -1))
+#         pred = torch.sigmoid(self.pred(x)).view(-1)
+#         return pred, mask_pred, x
+    
 
 class NonLocalEncoder(nn.Module):
     def __init__(self, options, num_input_channels):
@@ -534,7 +536,7 @@ class NonLocalEncoder(nn.Module):
                 self.padding = nn.ReflectionPad1d((kernel_size - 1) // 2)
                 self.edge_conv_1d = nn.Sequential(self.padding, nn.Conv1d(256 + 3, 256, kernel_size=kernel_size), nn.ReLU(inplace=True), self.padding, nn.Conv1d(256, 256, kernel_size=kernel_size), nn.ReLU(inplace=True))
                 pass
-            if 'noimage' not in options.suffix:
+            if 'image' in options.suffix:
                 num_sharing_channels += 1024
                 pass
             self.edge_layer_3 = LinearBlock(num_sharing_channels, 256)
@@ -554,15 +556,19 @@ class NonLocalEncoder(nn.Module):
             self.loop_edge_sim = LinearBlock(256, 256)                                                
             self.loop_loop_sim = LinearBlock(256, 256)            
             self.edge_loop_sim = LinearBlock(256, 256)
-            
-            self.edge_layer_3 = LinearBlock(256 * 3 + 1024, 256)
-            self.loop_layer_3 = LinearBlock(256 * 3 + 1024, 256)            
+            if 'image' in options.suffix:
+                self.edge_layer_3 = LinearBlock(256 * 3 + 1024, 256)
+                self.loop_layer_3 = LinearBlock(256 * 3 + 1024, 256)            
+            else:
+                self.edge_layer_3 = LinearBlock(256 * 3, 256)
+                self.loop_layer_3 = LinearBlock(256 * 3, 256)
+                pass
             pass
         self.edge_pred = nn.Sequential(LinearBlock(256, 64), nn.Linear(64, 1))
         self.loop_pred = nn.Sequential(LinearBlock(256, 64), nn.Linear(64, 1))
         return
     
-    def forward(self, edge_x, loop_x, image_x, loop_edge_masks, edge_conflict_mask, loop_conflict_mask, loop_masks, loop_edge_indices, edge_info):
+    def forward(self, edge_x, loop_x, image_x, loop_edge_masks, edge_conflict_mask, loop_conflict_mask, loop_edge_indices, edge_info):
         results = []
         
         # edge_x = self.edge_layer_1(edge_x)
@@ -583,7 +589,7 @@ class NonLocalEncoder(nn.Module):
             loop_edge_sim = self.loop_edge_sim(loop_x)
             edge_loop_sim = (edge_loop_sim.unsqueeze(1) * loop_edge_sim).mean(-1)            
             #loop_edge_sim = (loop_edge_sim.unsqueeze(1) * loop_edge_sim).mean(-1)
-            edge_x, loop_x = torch.cat([edge_x, (edge_x * edge_edge_sim.unsqueeze(-1)).sum(1), (loop_x * edge_loop_sim.unsqueeze(-1)).sum(1), image_x.repeat((len(edge_x), 1))], dim=-1), torch.cat([loop_x, (loop_x * loop_loop_sim.unsqueeze(-1)).sum(1), (edge_x * edge_loop_sim.transpose(0, 1).unsqueeze(-1)).sum(1), image_x.repeat((len(loop_x), 1))], dim=-1)
+            edge_x, loop_x = torch.cat([edge_x, (edge_x * edge_edge_sim.unsqueeze(-1)).sum(1), (loop_x * edge_loop_sim.unsqueeze(-1)).sum(1)], dim=-1), torch.cat([loop_x, (loop_x * loop_loop_sim.unsqueeze(-1)).sum(1), (edge_x * edge_loop_sim.transpose(0, 1).unsqueeze(-1)).sum(1)], dim=-1)
             edge_x = self.edge_layer_3(edge_x)                        
             loop_x = self.loop_layer_3(loop_x)            
         elif 'sharing' in self.options.suffix:
@@ -597,7 +603,7 @@ class NonLocalEncoder(nn.Module):
                     edge_pred = torch.sigmoid(self.edge_pred(edge_x)).view(-1)
                     loop_pred = torch.sigmoid(self.loop_pred(loop_x)).view(-1)
                     pass
-                results.append([edge_pred, loop_pred, loop_edge_masks, loop_masks])
+                results.append([edge_pred, loop_pred, loop_edge_masks, loop_conflict_mask])
                 weights = loop_edge_masks * torch.abs(loop_pred.unsqueeze(-1) - edge_pred)
                 #weights = loop_edge_masks * loop_pred.unsqueeze(-1)
                 edge_x_from_loop = (loop_x.unsqueeze(1) * weights.unsqueeze(-1)).sum(0) / torch.clamp(weights.sum(0).unsqueeze(-1), min=1e-4)
@@ -626,7 +632,7 @@ class NonLocalEncoder(nn.Module):
                     edge_xs.append(edge_x_1d)
                     loop_xs.append(loop_x_1d)
                     pass
-                if 'noimage' not in self.options.suffix:
+                if 'image' in self.options.suffix:
                     edge_xs.append(image_x.repeat((len(edge_x), 1)))
                     loop_xs.append(image_x.repeat((len(loop_x), 1)))                    
                     pass
@@ -645,7 +651,7 @@ class NonLocalEncoder(nn.Module):
             pass
         edge_pred = torch.sigmoid(self.edge_pred(edge_x)).view(-1)
         loop_pred = torch.sigmoid(self.loop_pred(loop_x)).view(-1)
-        results.append([edge_pred, loop_pred, loop_edge_masks, loop_masks])
+        results.append([edge_pred, loop_pred, loop_edge_masks, loop_conflict_mask])
         return results
 
 class ImageEncoder(nn.Module):
@@ -1418,15 +1424,15 @@ class MaskModel(nn.Module):
         edge_mask_pred = self.edge_decoder(edge_features)
         loop_mask_pred = self.loop_decoder(loop_features)
         results = []
-        results.append([edge_pred, loop_pred, loop_edge_masks, loop_masks, edge_mask_pred, loop_mask_pred])
-        if self.options.suffix != '':
+        results.append([edge_pred, loop_pred, loop_edge_masks, None, edge_mask_pred, loop_mask_pred])
+        if 'sharing' in self.options.suffix or 'maxpool' in self.options.suffix or 'fully' in self.options.suffix:
             edge_conflict_mask = compute_edge_conflict_mask(all_edges.view((-1, 2, 2))).float()
-            loop_conflict_mask = compute_loop_conflict_mask(loop_edge_masks, loop_masks, all_corners, edge_corner, edge_pred).float()
+            loop_conflict_mask = compute_loop_conflict_mask(loop_edge_masks, loop_masks, all_corners, edge_corner, edge_pred, loop_corner_indices).float()
             #results += self.nonlocal_encoder(edge_features, loop_features, image_x, loop_edge_masks, edge_conflict_mask, loop_conflict_mask)
             edge_directions = all_edges[:, :2] - all_edges[:, 2:]
             edge_lengths = torch.norm(edge_directions, dim=-1, keepdim=True)
             edge_info = torch.cat([edge_directions / torch.clamp(edge_lengths, min=1e-4), edge_lengths], dim=-1)
-            results += self.nonlocal_encoder(edge_features, loop_features, image_x, loop_edge_masks, edge_conflict_mask, loop_conflict_mask, loop_masks, loop_edge_indices, edge_info)
+            results += self.nonlocal_encoder(edge_features, loop_features, image_x, loop_edge_masks, edge_conflict_mask, loop_conflict_mask, loop_edge_indices, edge_info)
             #results[0] += [edge_mask_pred, loop_mask_pred]
             pass
         #results = [result + [loop_masks] for result in results]

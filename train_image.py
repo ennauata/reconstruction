@@ -83,8 +83,7 @@ def main(options):
     for num_edges in all_num_edges:
         print('num edges', num_edges)
         if options.restore == 1:
-
-            #model.load_state_dict(torch.load(options.checkpoint_dir + '/' + 'loop_checkpoint_sharing_all_connected_epoch_19.pth'))
+            #model.load_state_dict(torch.load(options.checkpoint_dir + '/0_checkpoint.pth'))
             model.load_state_dict(torch.load(options.checkpoint_dir + '/loop_checkpoint_{}_epoch_{}.pth'.format(options.suffix, options.num_epochs - 1)))
             optimizer.load_state_dict(torch.load(options.checkpoint_dir + '/loop_optim_{}_epoch_{}.pth'.format(options.suffix, options.num_epochs - 1)))
         elif options.restore == 2 and num_edges > 0:
@@ -100,8 +99,8 @@ def main(options):
             else:
                 checkpoint_dir = options.checkpoint_dir
                 pass
-            #state_dict = torch.load(checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth')
-            state_dict = torch.load(checkpoint_dir + '/loop_checkpoint_{}_epoch_{}.pth'.format(options.suffix, options.num_epochs - 1))
+            state_dict = torch.load(checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth')
+            #state_dict = torch.load(checkpoint_dir + '/loop_checkpoint_{}_epoch_{}.pth'.format(options.suffix, options.num_epochs - 1))
             state = model.state_dict()
             new_state_dict = {k: v for k, v in state_dict.items() if k in state and state[k].shape == v.shape}
             state.update(new_state_dict)
