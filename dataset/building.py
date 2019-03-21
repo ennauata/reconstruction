@@ -409,8 +409,31 @@ class Building():
                 edge_images.append(draw_edge(edge_index, edges_det))
                 continue
             edge_images = np.stack(edge_images, axis=0)
+
+            
+            edge_mask = 255 - (draw_edges(np.ones(len(self.edges_annot), dtype=bool), np.round(self.edges_annot).astype(np.int32)) * 255).astype(np.uint8)
+            #edge_mask = cv2.threshold(edge_mask, 127, 255, cv2.THRESH_BINARY)[1]            
+            #cv2.imwrite('test/mask.png', edge_mask)            
+            ret, masks = cv2.connectedComponents(edge_mask)
+            #print(ret)
+            #print(edge_mask.shape, masks.shape, masks.min(), masks.max())
+            if False:
+                loop_masks = []
+                for mask_index in range(1, masks.max() + 1):
+                    mask = masks == mask_index
+                    if mask[0][0] and mask[-1][0] and mask[0][-1] and mask[-1][-1]:
+                        continue
+                    loop_masks.append(cv2.resize(mask.astype(np.uint8), (64, 64)))
+                    #print(mask.shape, mask.min(), mask.max())
+                    #cv2.imwrite('test/mask_' + str(mask_index) + '.png', mask.astype(np.uint8) * 255)
+                    continue
+                loop_masks = np.stack(loop_masks, axis=0)
+            else:
+                loop_masks = np.array([1])
+                pass
+            #exit(1)
             #return [imgs.astype(np.float32), edge_images.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.graph_edge_index, self.graph_edge_attr, self.left_edges.astype(np.int64), self.right_edges.astype(np.int64)]
-            return [imgs.astype(np.float32), corner_masks.astype(np.float32), edge_images.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.corner_edge_pairs, self.edge_corner, self.left_edges.astype(np.int64), self.right_edges.astype(np.int64)]
+            return [imgs.astype(np.float32), corner_masks.astype(np.float32), edge_images.astype(np.float32), loop_masks.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.corner_edge_pairs, self.edge_corner, self.left_edges.astype(np.int64), self.right_edges.astype(np.int64)]
         else:
             return [imgs.astype(np.float32), corners_det.astype(np.float32) / 256, edges_det.astype(np.float32) / 256, self.corners_gt.astype(np.float32), self.edges_gt.astype(np.float32), self.graph_edge_index, self.graph_edge_attr]
 

@@ -94,13 +94,14 @@ def main(options):
             optimizer.load_state_dict(torch.load('checkpoint/batch_annots_only/' + str(num_edges) + '_optim.pth'))
             pass        
         elif options.restore == 4:
-            if options.suffix != '':
-                checkpoint_dir = options.checkpoint_dir.replace('_' + options.suffix, '')
-            else:
-                checkpoint_dir = options.checkpoint_dir
-                pass
-            state_dict = torch.load(checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth')
-            #state_dict = torch.load(checkpoint_dir + '/loop_checkpoint_{}_epoch_{}.pth'.format(options.suffix, options.num_epochs - 1))
+            # if options.suffix != '':
+            #     checkpoint_dir = options.checkpoint_dir.replace('_' + options.suffix, '')
+            # else:
+            #     checkpoint_dir = options.checkpoint_dir
+            #     pass
+            checkpoint_dir = options.checkpoint_dir            
+            #state_dict = torch.load(checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth')
+            state_dict = torch.load(checkpoint_dir + '/loop_checkpoint_{}_epoch_{}.pth'.format(options.suffix, options.num_epochs - 1))
             state = model.state_dict()
             new_state_dict = {k: v for k, v in state_dict.items() if k in state and state[k].shape == v.shape}
             state.update(new_state_dict)
@@ -145,7 +146,7 @@ def main(options):
             optimizer.zero_grad()        
             for sample_index, sample in enumerate(data_iterator):
 
-                im_arr, corner_images, edge_images, corners, edges, corner_gt, edge_gt, corner_edge_pairs, edge_corner, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(), sample[9].cuda().squeeze(), sample[10].cuda().squeeze(), sample[11].squeeze().item()
+                im_arr, corner_images, edge_images, loop_images, corners, edges, corner_gt, edge_gt, corner_edge_pairs, edge_corner, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(), sample[9].cuda().squeeze(), sample[10].cuda().squeeze(), sample[11].cuda().squeeze(), sample[12].squeeze().item()
                 if len(edge_images) > 200:
                     continue
                 #print(dset_train.buildings[building_index]._id)
@@ -169,8 +170,17 @@ def main(options):
 
                     if len(result) > 1:
                         loop_pred = result[1]
-                        loop_edge_mask = result[2]
-                        loop_gt = ((loop_edge_mask * edge_gt).sum(-1) == loop_edge_mask.sum(-1)).float()
+                        if 'IOU' not in options.suffix:
+                            loop_edge_mask = result[2][0]
+                            loop_gt = ((loop_edge_mask * edge_gt).sum(-1) == loop_edge_mask.sum(-1)).float()
+                        else:
+                            loop_masks = result[2][1]
+                            loop_images = loop_images > 0.5
+                            intersection = torch.min(loop_masks.unsqueeze(1), loop_images).sum(-1).sum(-1)
+                            union = torch.max(loop_masks.unsqueeze(1), loop_images).sum(-1).sum(-1)
+                            IOU = intersection  / torch.clamp(union, min=1e-4)
+                            loop_gt = (IOU.max(-1)[0] > 0.7).float()
+                            pass
                         losses.append(F.binary_cross_entropy(loop_pred, loop_gt))
                         loop_gts.append(loop_gt)
 
@@ -185,7 +195,7 @@ def main(options):
                         loop_mask_pred = result[5]
                         edge_mask_gt = torch.nn.functional.interpolate(edge_images.unsqueeze(1), size=(64, 64), mode='bilinear').squeeze(1)                        
                         losses.append(torch.nn.functional.binary_cross_entropy(edge_mask_pred, edge_mask_gt))
-                        loop_mask_gt = (result[2].unsqueeze(-1).unsqueeze(-1).detach() * edge_mask_gt).max(1)[0]
+                        loop_mask_gt = (result[2][0].unsqueeze(-1).unsqueeze(-1).detach() * edge_mask_gt).max(1)[0]
                         losses.append(torch.nn.functional.binary_cross_entropy(loop_mask_pred, loop_mask_gt))                
                         pass
                     continue
@@ -250,7 +260,7 @@ def main(options):
                     if len(results[0]) > 1:
                         for pred_index, (result, loop_gt) in enumerate(zip(results, loop_gts)):
                             loop_pred = result[1]
-                            loop_edge_mask = result[2]                        
+                            loop_edge_mask = result[2][0]                        
 
                             edge_mask = (loop_edge_mask * loop_pred.view((-1, 1))).max(0)[0]
                             images, _ = building.visualize(mode='', edge_state=edge_mask.detach().cpu().numpy() > 0.5, color=[0, 255, 0])
@@ -266,12 +276,26 @@ def main(options):
                                         pass
                                     pass
                                 pass
+                            if pred_index == 2 and False:
+                                if index_offset == 0 and True:
+                                    print(torch.cat([torch.stack([edge_pred, edge_gt], dim=-1), edge_corner.float()], dim=-1))
+                                    #print(multi_loop_edge_mask)
+                                    #order = torch.sort(loop_pred, descending=True)[1]
+                                    order = torch.arange(len(loop_pred)).cuda()
+                                    for mask_index, edge_mask in enumerate(loop_edge_mask[order].detach().cpu().numpy()):
+                                        print(mask_index, loop_pred[order[mask_index]], loop_gt[order[mask_index]])
+                                        images, _ = building.visualize(mode='', edge_state=edge_mask > 0.5, color=[0, 128, 0])
+                                        #cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_loop_' + str(pred_index) + '_gt_' + str(mask_index) + '.png', images[0])                                
+                                        pass                            
+                                    pass
+                                exit(1)
+                                pass                                                
                             continue
                         pass
-                    pass
                 continue
             print('loss', np.array(epoch_losses).mean(0))
 
+            torch.save(model.state_dict(), options.checkpoint_dir + '/checkpoint.pth')
             if (epoch+1) % 5 == 0:
                 torch.save(model.state_dict(), options.checkpoint_dir + '/loop_checkpoint_{}_epoch_{}.pth'.format(options.suffix, epoch))
                 torch.save(optimizer.state_dict(), options.checkpoint_dir + '/loop_optim_{}_epoch_{}.pth'.format(options.suffix, epoch))
@@ -296,9 +320,7 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
     row_images = []
     final_images = []        
     for sample_index, sample in enumerate(data_iterator):
-        im_arr, corner_images, edge_images, corners, edges, corner_gt, edge_gt, corner_edge_pairs, edge_corner, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(0), sample[9].cuda().squeeze(), sample[10].cuda().squeeze(), sample[11].squeeze().item()
-
-        im_arr, corner_images, edge_images, corners, edges, corner_gt, edge_gt, corner_edge_pairs, edge_corner, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(), sample[9].cuda().squeeze(), sample[10].cuda().squeeze(), sample[11].squeeze().item()
+        im_arr, corner_images, edge_images, loop_images, corners, edges, corner_gt, edge_gt, corner_edge_pairs, edge_corner, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(0), sample[9].cuda().squeeze(), sample[10].cuda().squeeze(), sample[11].cuda().squeeze(), sample[12].squeeze().item()
 
         images = im_arr.unsqueeze(0)
         edge_image_pred, results = model(images, corners, edges, corner_edge_pairs, edge_corner)
@@ -316,8 +338,17 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
 
             if len(result) > 1:
                 loop_pred = result[1]
-                loop_edge = result[2]
-                loop_gt = ((loop_edge * edge_gt).sum(-1) == loop_edge.sum(-1)).float()
+                if 'IOU' not in options.suffix:                    
+                    loop_edge_mask = result[2][0]
+                    loop_gt = ((loop_edge_mask * edge_gt).sum(-1) == loop_edge_mask.sum(-1)).float()
+                else:
+                    loop_masks = result[2][1]
+                    loop_images = loop_images > 0.5                    
+                    intersection = torch.min(loop_masks.unsqueeze(1), loop_images).sum(-1).sum(-1)
+                    union = torch.max(loop_masks.unsqueeze(1), loop_images).sum(-1).sum(-1)
+                    IOU = intersection  / torch.clamp(union, min=1e-4)
+                    loop_gt = (IOU.max(-1)[0] > 0.7).float()
+                    pass
                 losses.append(F.binary_cross_entropy(loop_pred, loop_gt))
                 loop_gts.append(loop_gt)
                 #print(index, edge_pred, edge_gt, loop_pred, loop_gt, losses[-2:])                
@@ -327,7 +358,7 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                 loop_mask_pred = result[5]
                 edge_mask_gt = torch.nn.functional.interpolate(edge_images.unsqueeze(1), size=(64, 64), mode='bilinear').squeeze(1)                        
                 losses.append(torch.nn.functional.binary_cross_entropy(edge_mask_pred, edge_mask_gt))
-                loop_mask_gt = (result[2].unsqueeze(-1).unsqueeze(-1).detach() * edge_mask_gt).max(1)[0]
+                loop_mask_gt = (result[2][0].unsqueeze(-1).unsqueeze(-1).detach() * edge_mask_gt).max(1)[0]
                 losses.append(torch.nn.functional.binary_cross_entropy(loop_mask_pred, loop_mask_gt))                
                 pass            
             continue
@@ -380,7 +411,7 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
             if len(results[0]) > 1:
                 for pred_index, (result, loop_gt) in enumerate(zip(results, loop_gts)):
                     loop_pred = result[1]
-                    loop_edge_mask = result[2]                        
+                    loop_edge_mask = result[2][0]
 
                     edge_mask = (loop_edge_mask * loop_pred.view((-1, 1))).max(0)[0]
                     images, _ = building.visualize(mode='', edge_state=edge_mask.detach().cpu().numpy() > 0.5, color=[0, 255, 0])
@@ -417,10 +448,12 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                         if pred_index == len(results) - 1:
                             row_images.append(images[0])
                             pass
+                        pass
 
-                        if index_offset == 0 and False:
+                    if pred_index == 0:
+                        if index_offset == 0 and options.building_id != '':
                             print(torch.cat([torch.stack([edge_pred, edge_gt], dim=-1), edge_corner.float()], dim=-1))
-                            print(multi_loop_edge_mask)
+                            #print(multi_loop_edge_mask)
                             #order = torch.sort(loop_pred, descending=True)[1]
                             order = torch.arange(len(loop_pred)).cuda()
                             for mask_index, edge_mask in enumerate(loop_edge_mask[order].detach().cpu().numpy()):
@@ -428,7 +461,6 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                                 images, _ = building.visualize(mode='', edge_state=edge_mask > 0.5, color=[0, 128, 0])
                                 cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_loop_' + str(pred_index) + '_gt_' + str(mask_index) + '.png', images[0])                                
                                 pass                            
-                            exit(1)
                             pass
                         pass
                     continue
@@ -452,6 +484,9 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
             # if len(all_images) > 10:
             #     break
             #exit(1)
+        else:
+            if not visualize:
+                return
             pass
         continue
 
