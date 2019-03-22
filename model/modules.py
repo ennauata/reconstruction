@@ -172,8 +172,8 @@ def findLoopsModule(edge_confidence, edge_corner, num_corners, max_num_loop_corn
 
         loop = torch.cat([path_corners, corner_range.unsqueeze(-1).repeat((len(corner_range), 1, 1))], dim=-1)
         loop_confidence = total_confidence / (path_index + 3)
-        #mask = (loop_confidence > confidence_threshold) & (corner_confidence > 0.5)
-        mask = loop_confidence > confidence_threshold
+        mask = (loop_confidence > confidence_threshold) & (corner_confidence > 0.5)
+        #mask = loop_confidence > confidence_threshold
 
         if loop.shape[-1] == 4 and False:
             print(loop)
