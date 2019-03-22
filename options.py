@@ -52,6 +52,6 @@ def parse_args():
                         default='', type=str)
     parser.add_argument('--num_epochs', dest='num_epochs',
                         help='the number of epochs',
-                        default=10, type=int)
+                        default=20, type=int)
 
     return parser.parse_args()
