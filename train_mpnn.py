@@ -167,6 +167,8 @@ def main(options):
                     edge_loss = F.binary_cross_entropy(edge_pred, edge_gt)                    
                     losses.append(edge_loss)
 
+                    if 'decoder' in options.suffix:
+                        continue                    
                     if len(result) > 1:
                         edge_mask_pred = result[1]
                         edge_mask_gt = torch.nn.functional.interpolate(edge_images.unsqueeze(1), size=(64, 64), mode='bilinear').squeeze(1)                        
@@ -213,6 +215,8 @@ def main(options):
                         images, _ = building.visualize(mode='', edge_state=edge_pred.detach().cpu().numpy() > 0.5)
                         cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_edge_' + str(pred_index) + '_pred.png', images[0])
 
+                        if 'decoder' in options.suffix:
+                            continue
                         edge_mask_pred = result[1]
                         cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_edge_mask_gt.png', cv2.resize((edge_mask_gt[edge_gt > 0.5].max(0)[0].squeeze().detach().cpu().numpy() * 255).astype(np.uint8), (256, 256)))
                         if (edge_pred > 0.5).sum() > 0:
@@ -328,7 +332,7 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                         pass
                     pass
                 
-                if visualize and (pred_index == len(results) - 1):
+                if visualize and pred_index == len(results) - 1:
                 #if visualize and (pred_index == 0):
                     multi_loop_edge_mask, debug_info = findBestMultiLoopEdge(edge_pred, edge_corner, corners)
                     # images, _ = building.visualize(mode='', edge_state=multi_loop_edge_mask.detach().cpu().numpy() > 0.5, color=[255, 255, 0])
@@ -355,6 +359,7 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                         order = torch.arange(len(loop_edge_masks)).cuda()
                         print(multi_loop_edge_mask.nonzero().view(-1))
                         print(debug_info[5])
+                        print(debug_info[6])                        
                         print(debug_info[2])
                         print(debug_info[3])                                                
                         for mask_index, edge_mask in enumerate(loop_edge_masks[order].detach().cpu().numpy()):
