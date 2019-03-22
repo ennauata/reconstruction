@@ -575,23 +575,25 @@ def findBestMultiLoopEdge(edge_confidence, edge_corner, all_corners):
     if len(loop_corner_indices) > 1:
         loop_subset_mask = torch.stack([torch.stack([(corner_indices_1.unsqueeze(-1) == corner_indices_2).max(-1)[0].min(0)[0] for corner_indices_2 in loop_corner_indices]) for corner_indices_1 in loop_corner_indices])
         loop_subset_mask = torch.max(loop_subset_mask, loop_subset_mask.transpose(0, 1))
-        order = torch.sort(loop_confidence, descending=True)[1]
-        conflict_mask = loop_subset_mask[order[0]]
-        valid_indices = [order[0]]
-        for index in range(1, len(order)):
-            index = order[index]
-            if conflict_mask[index]:
+        if False:
+            order = torch.sort(loop_confidence, descending=True)[1]
+            conflict_mask = loop_subset_mask[order[0]]
+            valid_indices = [order[0]]
+            for index in range(1, len(order)):
+                index = order[index]
+                if conflict_mask[index]:
+                    continue
+                conflict_mask = torch.max(conflict_mask, loop_subset_mask[index])
+                valid_indices.append(index)
                 continue
-            conflict_mask = torch.max(conflict_mask, loop_subset_mask[index])
-            valid_indices.append(index)
-            continue
-        loop_confidence = loop_confidence[torch.stack(valid_indices)]
-        loop_corner_indices = [loop_corner_indices[index] for index in valid_indices]
-        
-        # confidence_mask = loop_confidence.unsqueeze(-1) < loop_confidence
-        # valid_indices = ((loop_subset_mask & confidence_mask).max(-1)[0] == 0).nonzero()[:, 0]
-        # loop_confidence = loop_confidence[valid_indices]
-        # loop_corner_indices = [loop_corner_indices[index] for index in valid_indices]
+            loop_confidence = loop_confidence[torch.stack(valid_indices)]
+            loop_corner_indices = [loop_corner_indices[index] for index in valid_indices]
+        else:
+            confidence_mask = loop_confidence.unsqueeze(-1) < loop_confidence
+            valid_indices = ((loop_subset_mask & confidence_mask).max(-1)[0] == 0).nonzero()[:, 0]
+            loop_confidence = loop_confidence[valid_indices]
+            loop_corner_indices = [loop_corner_indices[index] for index in valid_indices]
+            pass
         pass
     #print(loop_corner_indices)
     
@@ -707,30 +709,36 @@ def findBestMultiLoopEdge(edge_confidence, edge_corner, all_corners):
     if False:
         multi_loop_edge_confidence = (multi_loop_edge_masks.float() * (edge_confidence - 0.5)).sum(-1)
     else:
-        edge_normals = all_edges / torch.clamp(torch.norm(all_edges, dim=-1, keepdim=True), 1e-4)
-        dot_product = (edge_normals[:, 0].unsqueeze(-2) * edge_normals[:, 1]).sum(-1)
-        colinear_mask = torch.abs(dot_product) > dot_product_threshold
+        edge_normals = all_edges[:, 1] - all_edges[:, 0]
+        edge_normals = edge_normals / torch.clamp(torch.norm(edge_normals, dim=-1, keepdim=True), 1e-4)
+        dot_product = (edge_normals.unsqueeze(-2) * edge_normals).sum(-1)
+        dot_product_mask = torch.abs(dot_product) > dot_product_threshold
         same_corner_mask = (edge_corner.unsqueeze(0).unsqueeze(-2) == edge_corner.unsqueeze(1).unsqueeze(-1)).max(-1)[0].max(-1)[0]
-        active_mask = torch.max(edge_confidence.unsqueeze(-1), edge_confidence) > 0.5
-        colinear_mask = colinear_mask & same_corner_mask & active_mask
-        print(colinear_mask)                
+        active_mask = torch.min(edge_confidence.unsqueeze(-1), edge_confidence) > 0.5
+        colinear_mask = dot_product_mask & same_corner_mask & active_mask
+        colinear_mask = torch.max(colinear_mask, torch.eye(len(colinear_mask)).cuda().byte())
         while True:
-            new_colinear_mask = (colinear_mask.unsqueeze(1) * colinear_mask).max(1)[0]
+            new_colinear_mask = (colinear_mask.unsqueeze(-1) * colinear_mask).max(1)[0]
             if (new_colinear_mask == colinear_mask).min():
-                print(new_colinear_mask, colinear_mask, (new_colinear_mask == colinear_mask).min())
                 break
-            colinear_mask = colinear_mask
+            colinear_mask = new_colinear_mask
             continue
-        edge_values = (colinear_mask.long() * torch.arange(len(colinear_mask)).cuda()).sum(-1)
-        _, edge_group_masks = torch.unique(edge_values, return_inverse=True)
-        edge_group_masks = edge_group_masks.unsqueeze(-1) == torch.arange(len(_)).cuda()
+        edge_group_mapping = torch.full((len(colinear_mask), ), fill_value=-1).cuda().long()
+        new_index = 0
+        for index in range(len(colinear_mask)):
+            if edge_group_mapping[index] >= 0:
+                continue
+            edge_group_mapping[colinear_mask[index]] = new_index
+            new_index += 1
+            continue
+        
+        # edge_values = (colinear_mask.long() * torch.arange(len(colinear_mask)).cuda()).sum(-1)
+        # print(edge_values)
+        # _, edge_group_mapping = torch.unique(edge_values, return_inverse=True)
+        edge_group_masks = edge_group_mapping.unsqueeze(-1) == torch.arange(new_index).cuda()
         edge_group_masks = edge_group_masks.float()
         group_confidence = (edge_group_masks * edge_confidence.unsqueeze(-1)).sum(0) / torch.clamp(edge_group_masks.sum(0), 1e-4)
-
-        print(colinear_mask)        
-        print(edge_group_masks)
         multi_loop_group_masks = (multi_loop_edge_masks.float().unsqueeze(-1) * edge_group_masks).max(1)[0]
-        print(multi_loop_group_masks)
         multi_loop_edge_confidence = (multi_loop_group_masks.float() * (group_confidence - 0.5)).sum(-1)        
         pass
     
@@ -738,7 +746,7 @@ def findBestMultiLoopEdge(edge_confidence, edge_corner, all_corners):
     best_multi_loop = multi_loop_edge_masks[(multi_loop_edge_confidence).max(0)[1]]
 
     top_indices = torch.sort(multi_loop_edge_confidence, descending=True)[1][:10]
-    debug_info = [loop_edge_masks, multi_loop_edge_masks[top_indices], multi_loop_masks[top_indices], multi_loop_confidence[top_indices], multi_loop_edge_confidence[top_indices]]
+    debug_info = [loop_edge_masks, multi_loop_edge_masks[top_indices], multi_loop_masks[top_indices], multi_loop_group_masks[top_indices], multi_loop_confidence[top_indices], multi_loop_edge_confidence[top_indices]]
     return best_multi_loop, debug_info
 
 

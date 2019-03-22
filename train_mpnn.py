@@ -354,8 +354,9 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                         #order = torch.sort(loop_pred, descending=True)[1]
                         order = torch.arange(len(loop_edge_masks)).cuda()
                         print(multi_loop_edge_mask.nonzero().view(-1))
-                        print(debug_info[4])
-                        print(debug_info[2])                        
+                        print(debug_info[5])
+                        print(debug_info[2])
+                        print(debug_info[3])                                                
                         for mask_index, edge_mask in enumerate(loop_edge_masks[order].detach().cpu().numpy()):
                             if mask_index == len(debug_info[0]):
                                 print('multi loop')

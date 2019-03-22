@@ -52,18 +52,18 @@ class Metrics():
         values = []
         recall, precision = self.calc_corner_metrics()
         f_score = 2.0*precision*recall/(precision+recall+1e-8)
-        values += [precision, recall]
+        values += [precision, recall, f_score]
         print('Overall Scores\n-- corners \nrecall: %.3f\nprecision: %.3f\nf_score: %.3f\n' % (recall, precision, f_score))
 
         # print scores
         recall, precision = self.calc_edge_metrics()
         f_score = 2.0*precision*recall/(precision+recall+1e-8)
-        values += [precision, recall]        
+        values += [precision, recall, f_score]        
         print('Overall Scores\n-- edges \nrecall: %.3f\nprecision: %.3f\nf_score: %.3f\n' % (recall, precision, f_score))
 
         recall, precision = self.calc_loop_metrics()
         f_score = 2.0*precision*recall/(precision+recall+1e-8)
-        values += [precision, recall]
+        values += [precision, recall, f_score]
         print('-- loops \nrecall: %.3f\nprecision: %.3f\nf_score: %.3f\n' % (recall, precision, f_score))
 
         # print('Per sample')
