@@ -32,12 +32,6 @@ def main(options):
     ##############################################################################################################
     ############################################### Define Model #################################################
     ##############################################################################################################
-
-    # edge_pred, edge_corner, num_corners, corners = torch.load('test/debug.pth')
-    # print(edge_corner)    
-    # print(edge_pred)
-    # all_loops = findLoopsModule(edge_pred, edge_corner, num_corners, max_num_loop_corners=12, corners=corners, disable_colinear=True, disable_intersection=True)
-    # exit(1)
     
     model = MPNN(options)
     model = model.cuda()
@@ -46,100 +40,67 @@ def main(options):
     # select optimizer
     params = list(model.parameters())
     optimizer = optim.Adam(params, lr=options.LR)
-    #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=0.1)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.1)
 
-    # sample_eval = EdgeClassifier()
-    # sample_eval = sample_eval.cpu()
-    # sample_eval = sample_eval.eval()
     ##############################################################################################################
     ############################################# Setup Training #################################################
     ##############################################################################################################
     PREFIX = options.data_path
-    with open('{}/train_list.txt'.format(PREFIX)) as f:
+    with open('{}/train_list_V2.txt'.format(PREFIX)) as f:
         file_list = [line.strip() for line in f.readlines()]
         train_list = file_list
         # train_list = file_list[:-50]
         # valid_list = file_list[-50:]
         pass
 
-    with open('{}/valid_list.txt'.format(PREFIX)) as f:
+    with open('{}/valid_list_V2.txt'.format(PREFIX)) as f:
         valid_list = [line.strip() for line in f.readlines()]
         pass
 
     train_list = train_list + valid_list[:-100]    
     valid_list = valid_list[-100:]
     #valid_list = train_list[:10]
-    
+    #valid_list = ["1552595520.57"]
+
     best_score = 0.0
     mt = Metrics()
 
     ##############################################################################################################
-    ############################################### Start Training ###############################################
+    ################################################ Perform Task ################################################
     ##############################################################################################################
 
-    all_num_edges = [0]
+    # restore pretrained model
+    if options.restore == 1:
+        model.load_state_dict(torch.load(options.checkpoint_dir + '/loop_checkpoint_{}_epoch_{}.pth'.format(options.suffix, options.num_epochs - 1)))
+        optimizer.load_state_dict(torch.load(options.checkpoint_dir + '/loop_optim_{}_epoch_{}.pth'.format(options.suffix, options.num_epochs - 1)))
 
-    ## Train incrementally
-    for num_edges in all_num_edges:
-        print('num edges', num_edges)
-        if options.restore == 1:
-            #model.load_state_dict(torch.load(options.checkpoint_dir + '/0_checkpoint.pth'))
-            model.load_state_dict(torch.load(options.checkpoint_dir + '/loop_checkpoint_{}_epoch_{}.pth'.format(options.suffix, options.num_epochs - 1)))
-            optimizer.load_state_dict(torch.load(options.checkpoint_dir + '/loop_optim_{}_epoch_{}.pth'.format(options.suffix, options.num_epochs - 1)))
-        elif options.restore == 2 and num_edges > 0:
-            model.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges - 1) + '_checkpoint.pth'))
-            optimizer.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges - 1) + '_optim.pth'))
-        elif options.restore == 3:
-            model.load_state_dict(torch.load('checkpoint/batch_annots_only/' + str(num_edges) + '_checkpoint.pth'))
-            optimizer.load_state_dict(torch.load('checkpoint/batch_annots_only/' + str(num_edges) + '_optim.pth'))
-            pass        
-        elif options.restore == 4:
-            # if options.suffix != '':
-            #     checkpoint_dir = options.checkpoint_dir.replace('_' + options.suffix, '')
-            # else:
-            #     checkpoint_dir = options.checkpoint_dir
-            #     pass
-            checkpoint_dir = options.checkpoint_dir            
-            #state_dict = torch.load(checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth')
-            state_dict = torch.load(checkpoint_dir + '/loop_checkpoint_{}_epoch_{}.pth'.format(options.suffix, options.num_epochs - 1))
-            state = model.state_dict()
-            new_state_dict = {k: v for k, v in state_dict.items() if k in state and state[k].shape == v.shape}
-            state.update(new_state_dict)
-            model.load_state_dict(state)
-            #optimizer.load_state_dict(torch.load(options.checkpoint_dir + '/' + str(num_edges) + '_optim.pth'))            
-        if options.num_edges == -1 and os.path.exists(options.checkpoint_dir + '/' + str(num_edges) + '_checkpoint.pth'):
-            continue
-
-        dset_val = GraphData(options, valid_list, split='val', num_edges=num_edges, load_heatmaps=True)
-
-        if options.task == 'test':
-            with torch.no_grad():
-                testOneEpoch(options, model, dset_val)
-            exit(1)
+    # test option
+    if options.task == 'test':
+        dset_val = GraphData(options, valid_list, split='val', num_edges=0, load_heatmaps=True)
+        with torch.no_grad():
+            testOneEpoch(options, model, dset_val)
+        exit(1)
+        pass
+    
+    # visualization task
+    elif options.task == 'visualize':
+        dset_val = GraphData(options, valid_list, split='val', num_edges=0, load_heatmaps=True)
+        with torch.no_grad():
+            additional_models = []
+            testOneEpoch(options, model, dset_val, additional_models, visualize=True)
             pass
-        
-        if options.task == 'visualize':
-            with torch.no_grad():
-                additional_models = []
-                # if options.suffix == '':
-                #     annotation_model = create_model(options)
-                #     annotation_model = annotation_model.cuda()
-                #     annotation_model.load_state_dict(torch.load(options.checkpoint_dir.replace(options.corner_type, 'annots_only') + '/' + str(num_edges) + '_checkpoint.pth'))
-                #     additional_models.append(annotation_model)
-                #     pass
-                testOneEpoch(options, model, dset_val, additional_models, visualize=True)
-                pass
-            exit(1)
-            pass
+        exit(1)
+        pass
 
-
-        dset_train = GraphData(options, train_list, num_edges=num_edges, load_heatmaps=True)
-            
-
+    else:
+        # training task
+        dset_train = GraphData(options, train_list, num_edges=0, load_heatmaps=True)
+        dset_val = GraphData(options, valid_list, split='val', num_edges=0, load_heatmaps=True)
         for epoch in range(options.num_epochs):
+            scheduler.step()
             #os.system('rm ' + options.test_dir + '/' + str(num_edges) + '_*')
             dset_train.reset()
-            train_loader = DataLoader(dset_train, batch_size=1, shuffle=True, num_workers=4)    
+            train_loader = DataLoader(dset_train, batch_size=1, shuffle=True, num_workers=1)    
             epoch_losses = []
             ## Same with train_loader but provide progress bar
             data_iterator = tqdm(train_loader, total=len(dset_train))
@@ -152,8 +113,9 @@ def main(options):
                 #print(dset_train.buildings[building_index]._id)
                 #print('num edges', len(edge_gt))
 
-                #images = torch.cat([im_arr.unsqueeze(0).repeat((len(edge_images), 1, 1, 1)), edge_images.unsqueeze(1)], dim=1)
-                images = im_arr.unsqueeze(0)
+                images = torch.cat([im_arr.unsqueeze(0).repeat((len(edge_images), 1, 1, 1)), edge_images.unsqueeze(1)], dim=1)
+                #images = im_arr.unsqueeze(0)
+
                 edge_image_pred, results = model(images, corners, edges, corner_edge_pairs, edge_corner)
 
                 losses = []
@@ -163,29 +125,38 @@ def main(options):
                     pass
                 
                 for index, result in enumerate(results):
+                    
+                    # edge classification losses
+                    # add weight to handle class imbalance
+                    #weight = edge_gt * 4.0 + 1.0 
                     edge_pred = result[0]
                     edge_loss = F.binary_cross_entropy(edge_pred, edge_gt)                    
                     losses.append(edge_loss)
-
-                    if 'decoder' in options.suffix:
-                        continue                    
+                    # print("true", torch.nonzero(edge_gt==1).shape)
+                    # print("false", torch.nonzero(edge_gt==0).shape)
+                    
+                    # edge segmentation losses
                     if len(result) > 1:
                         edge_mask_pred = result[1]
                         edge_mask_gt = torch.nn.functional.interpolate(edge_images.unsqueeze(1), size=(64, 64), mode='bilinear').squeeze(1)                        
                         losses.append(torch.nn.functional.binary_cross_entropy(edge_mask_pred, edge_mask_gt))
-                    if len(result) > 2 and len(result[2]) > 1:                        
-                        loop_mask_pred = result[2][1]
-                        loop_mask_gt = (result[2][0].unsqueeze(-1).unsqueeze(-1).detach() * edge_mask_gt).max(1)[0]
-                        losses.append(torch.nn.functional.binary_cross_entropy(loop_mask_pred, loop_mask_gt))                
+                   
+                    # loop classification loss
+                    if len(result) > 2:                           
+                        loop_edge_mask = result[2]
+                        loop_pred = result[3]
+                        loop_gt = ((loop_edge_mask * edge_gt).sum(-1) == loop_edge_mask.sum(-1)).float()
+                        losses.append(torch.nn.functional.binary_cross_entropy(loop_pred, loop_gt))     
+                        # print(torch.nonzero(loop_gt==1).shape)
+                        # print(torch.nonzero(loop_gt==0).shape)           
                         pass
                     continue
                 
                 loss = sum(losses)        
-
                 loss.backward()
 
+                # update training step
                 if (sample_index + 1) % options.batch_size == 0 or True:
-                    ## Progress bar
                     loss_values = [l.data.item() for l in losses]
                     epoch_losses.append(loss_values)
                     status = str(epoch + 1) + ' loss: '
@@ -193,19 +164,19 @@ def main(options):
                         status += '%0.5f '%l
                         continue
                     data_iterator.set_description(status)
-
                     optimizer.step()
                     optimizer.zero_grad()
                     pass
 
+                # debug visualization during training
                 if sample_index % 1000 < 16:
                     index_offset = sample_index % 1000
                     building = dset_train.buildings[building_index]
                     #building.update_edges(edge_pred.detach().cpu().numpy() > 0.5)
 
-                    if 'image' in options.suffix:
-                        cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_image_gt.png', (edge_image_gt.squeeze().detach().cpu().numpy() * 255).astype(np.uint8))
-                        cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_image_pred.png', (edge_image_pred.squeeze().detach().cpu().numpy() * 255).astype(np.uint8))
+                    # if 'image' in options.suffix:
+                    #     cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_image_gt.png', (edge_image_gt.squeeze().detach().cpu().numpy() * 255).astype(np.uint8))
+                    #     cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_image_pred.png', (edge_image_pred.squeeze().detach().cpu().numpy() * 255).astype(np.uint8))
 
                     images, _ = building.visualize(mode='', edge_state=edge_gt.detach().cpu().numpy() > 0.5, color=[0, 0, 255])
                     cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_edge_gt.png', images[0])
@@ -215,38 +186,37 @@ def main(options):
                         images, _ = building.visualize(mode='', edge_state=edge_pred.detach().cpu().numpy() > 0.5)
                         cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_edge_' + str(pred_index) + '_pred.png', images[0])
 
-                        if 'decoder' in options.suffix:
-                            continue
                         edge_mask_pred = result[1]
                         cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_edge_mask_gt.png', cv2.resize((edge_mask_gt[edge_gt > 0.5].max(0)[0].squeeze().detach().cpu().numpy() * 255).astype(np.uint8), (256, 256)))
                         if (edge_pred > 0.5).sum() > 0:
                             cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_edge_mask_pred.png', cv2.resize((edge_mask_pred[edge_pred > 0.5].max(0)[0].squeeze().detach().cpu().numpy() * 255).astype(np.uint8), (256, 256)))
                             pass
 
-                        if len(result) > 2 and len(result[2]) > 1:
-                            loop_mask_pred = result[2][1]                                                
-                            if (loop_gts[pred_index] > 0.5).sum() > 0:
-                                cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_loop_mask_gt.png', cv2.resize((loop_mask_gt[loop_gts[pred_index] > 0.5].max(0)[0].squeeze().detach().cpu().numpy() * 255).astype(np.uint8), (256, 256)))
-                                pass
-                            if (result[1] > 0.5).sum() > 0:
-                                cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_loop_mask_pred.png', cv2.resize((loop_mask_pred[result[1] > 0.5].max(0)[0].squeeze().detach().cpu().numpy() * 255).astype(np.uint8), (256, 256)))
-                                pass                                            
-                        continue
+                        # if len(result) > 2 and len(result[2]) > 1:
+                        #     loop_mask_pred = result[2][1]                                                
+                        #     if (loop_gts[pred_index] > 0.5).sum() > 0:
+                        #         cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_loop_mask_gt.png', cv2.resize((loop_mask_gt[loop_gts[pred_index] > 0.5].max(0)[0].squeeze().detach().cpu().numpy() * 255).astype(np.uint8), (256, 256)))
+                        #         pass
+                        #     if (result[1] > 0.5).sum() > 0:
+                        #         cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_loop_mask_pred.png', cv2.resize((loop_mask_pred[result[1] > 0.5].max(0)[0].squeeze().detach().cpu().numpy() * 255).astype(np.uint8), (256, 256)))
+                        #         pass                                            
+                        # continue
                     pass
                 continue
             print('loss', np.array(epoch_losses).mean(0))
 
+            # save checkpoint
             torch.save(model.state_dict(), options.checkpoint_dir + '/checkpoint.pth')
             if (epoch+1) % 5 == 0:
                 torch.save(model.state_dict(), options.checkpoint_dir + '/loop_checkpoint_{}_epoch_{}.pth'.format(options.suffix, epoch))
                 torch.save(optimizer.state_dict(), options.checkpoint_dir + '/loop_optim_{}_epoch_{}.pth'.format(options.suffix, epoch))
                 pass
             
+            # validation phase
             with torch.no_grad():
                 testOneEpoch(options, model, dset_val) 
                 pass
             continue
-        continue
     return
 
 def testOneEpoch(options, model, dataset, additional_models=[], visualize=False):
@@ -264,7 +234,8 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
     for sample_index, sample in enumerate(data_iterator):
         im_arr, corner_images, edge_images, loop_images, corners, edges, corner_gt, edge_gt, corner_edge_pairs, edge_corner, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(0), sample[9].cuda().squeeze(), sample[10].cuda().squeeze(), sample[11].cuda().squeeze(), sample[12].squeeze().item()
 
-        images = im_arr.unsqueeze(0)
+        #images = im_arr.unsqueeze(0)
+        images = torch.cat([im_arr.unsqueeze(0).repeat((len(edge_images), 1, 1, 1)), edge_images.unsqueeze(1)], dim=1)
         edge_image_pred, results = model(images, corners, edges, corner_edge_pairs, edge_corner)
 
         losses = []
@@ -274,21 +245,27 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
             pass
 
         for index, result in enumerate(results):
+
+            # edge classification losses
             edge_pred = result[0]
             edge_loss = F.binary_cross_entropy(edge_pred, edge_gt)                    
             losses.append(edge_loss)
 
+            # edge segmentation losses
             if len(result) > 1:
                 edge_mask_pred = result[1]
                 edge_mask_gt = torch.nn.functional.interpolate(edge_images.unsqueeze(1), size=(64, 64), mode='bilinear').squeeze(1)                        
-                losses.append(torch.nn.functional.binary_cross_entropy(edge_mask_pred, edge_mask_gt))
-            if len(result) > 2 and len(result[2]) > 1:                        
-                loop_mask_pred = result[2][1]
-                loop_mask_gt = (result[2][0].unsqueeze(-1).unsqueeze(-1).detach() * edge_mask_gt).max(1)[0]
-                losses.append(torch.nn.functional.binary_cross_entropy(loop_mask_pred, loop_mask_gt))                
-                pass
-            continue
+                #losses.append(torch.nn.functional.binary_cross_entropy(edge_mask_pred, edge_mask_gt))
 
+            # loop classification loss
+            if len(result) > 2:                           
+                loop_edge_mask = result[2]
+                loop_pred = result[3]
+                loop_gt = ((loop_edge_mask * edge_gt).sum(-1) == loop_edge_mask.sum(-1)).float()
+                losses.append(torch.nn.functional.binary_cross_entropy(loop_pred, loop_gt))     
+                # print(torch.nonzero(loop_gt==1).shape)
+                # print(torch.nonzero(loop_gt==0).shape)           
+                pass
         loss = sum(losses)        
 
         loss_values = [l.data.item() for l in losses]
@@ -321,16 +298,16 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                     if (edge_pred > 0.5).sum() > 0:
                         cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_edge_mask_pred.png', cv2.resize((edge_mask_pred[edge_pred > 0.5].max(0)[0].squeeze().detach().cpu().numpy() * 255).astype(np.uint8), (256, 256)))
                         pass
-                    if len(result) > 2 and len(result[2]) > 1:
-                        loop_mask_pred = result[2][1]                        
-                        if (loop_gts[pred_index] > 0.5).sum() > 0:
-                            cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_loop_mask_gt.png', cv2.resize((loop_mask_gt[loop_gts[pred_index] > 0.5].max(0)[0].squeeze().detach().cpu().numpy() * 255).astype(np.uint8), (256, 256)))
-                            pass
-                        if (result[1] > 0.5).sum() > 0:
-                            cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_loop_mask_pred.png', cv2.resize((loop_mask_pred[result[1] > 0.5].max(0)[0].squeeze().detach().cpu().numpy() * 255).astype(np.uint8), (256, 256)))
-                            pass
-                        pass
-                    pass
+                    # if len(result) > 2 and len(result[2]) > 1:
+                    #     loop_mask_pred = result[2][1]                        
+                    #     if (loop_gts[pred_index] > 0.5).sum() > 0:
+                    #         cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_loop_mask_gt.png', cv2.resize((loop_mask_gt[loop_gts[pred_index] > 0.5].max(0)[0].squeeze().detach().cpu().numpy() * 255).astype(np.uint8), (256, 256)))
+                    #         pass
+                    #     if (result[1] > 0.5).sum() > 0:
+                    #         cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_loop_mask_pred.png', cv2.resize((loop_mask_pred[result[1] > 0.5].max(0)[0].squeeze().detach().cpu().numpy() * 255).astype(np.uint8), (256, 256)))
+                    #         pass
+                    #     pass
+                    # pass
                 
                 if visualize and pred_index == len(results) - 1:
                 #if visualize and (pred_index == 0):
@@ -392,9 +369,6 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                 exit(1)
                 pass
             
-            # if len(all_images) > 10:
-            #     break
-            #exit(1)
         else:
             if not visualize:
                 return
@@ -413,18 +387,13 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
         if len(row_images) > 0:
             all_images.append(row_images)
             pass        
-        image = tileImages(all_images[:10], background_color=0)
+        image = tileImages(all_images, background_color=0)
         cv2.imwrite(options.test_dir + '/results.png', image)
         final_images = [final_images[c * 10:(c + 1) * 10] for c in range(len(final_images) // 10)]
         image = tileImages(final_images, background_color=0)
         cv2.imwrite(options.test_dir + '/results_final.png', image)
         np.save(options.test_dir + '/statistics.npy', np.stack(all_statistics))
         pass
-
-    #print('statistics', statistics[0] / (statistics[0] + statistics[1]), statistics[3] / (statistics[2] + statistics[3]), statistics[4] / statistics[5], statistics[5])
-    # for i in range(350):
-    #     if (statistics_per_length[i, 0] + statistics_per_length[i, 1] > 0) and (statistics_per_length[i, 2] + statistics_per_length[i, 3] > 0): 
-    #         print('{}, {}, {}'.format(i+1, statistics_per_length[i, 0] / (statistics_per_length[i, 0] + statistics_per_length[i, 1] + 1E-10), statistics_per_length[i, 3] / (statistics_per_length[i, 2] + statistics_per_length[i, 3] + 1E-10)))
 
     print('validation loss', np.array(epoch_losses).mean(0))
     model.train()

@@ -34,8 +34,8 @@ class GraphData(Dataset):
                 pass
             corner_types = []
             corner_type = options.corner_type if split == 'train' else options.testing_corner_type
-            if 'annots_dets' in corner_type:
-                corner_types.append('annots_dets')
+            if 'hybrid' in corner_type:
+                corner_types.append('hybrid')
             else:
                 if 'dets' in corner_type:
                     corner_types.append('dets_only')

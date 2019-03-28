@@ -31,7 +31,7 @@ def parse_args():
                         default=1, type=int)
     parser.add_argument('--LR', dest='LR',
                         help='learning rate',
-                        default=1e-4, type=float)
+                        default=1e-3, type=float)
     parser.add_argument('--task', dest='task',
                         help='task',
                         default='train', type=str)

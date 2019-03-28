@@ -7,6 +7,7 @@ from model.modules import findLoopsModule, findMultiLoopsModule, LinearBlock, Co
 from model.resnet import BasicBlock, conv1x1
 #from maskrcnn_benchmark.layers import roi_align
 import sparseconvnet as scn
+from utils.utils import draw_loops
 
 class LoopEncoder(nn.Module):
     def __init__(self, num_input_channels):
@@ -172,10 +173,14 @@ class MPModule(nn.Module):
         # self.loop_layer_1 = LinearBlock(num_input_channels, 256)        
         # self.edge_layer_2 = LinearBlock(256, 64)
         # self.loop_layer_2 = LinearBlock(256, 64)
-
-        if 'sharing' in options.suffix:
+        if 'independent' in self.options.suffix:
+            self.edge_layer_3 = LinearBlock(512, 256)
+        elif 'sharing' in options.suffix:
             self.edge_conv_1d = LoopEncoder(256 + 3)
-            self.edge_layer_3 = LinearBlock(256 * 3 + int('image' in options.suffix) * 1024, 256)
+            if 'from_loop' in options.suffix:
+                self.edge_layer_3 = LinearBlock(256 * 2 + int('image' in options.suffix) * 1024, 256)
+            else:
+                self.edge_layer_3 = LinearBlock(256 * 3 + int('image' in options.suffix) * 1024, 256)
         elif 'maxpool' in options.suffix:
             self.edge_layer_3 = LinearBlock(512, 256)
             self.loop_layer_3 = LinearBlock(512, 256)
@@ -185,8 +190,13 @@ class MPModule(nn.Module):
             self.edge_layer_3 = LinearBlock(256 * 3 + int('image' in options.suffix) * 1024, 256)
             pass
         return
-    
+
     def forward(self, edge_pred, edge_corner, all_corners, edge_x, image_x):
+
+        if 'debug' in self.options.suffix:
+            edge_x = self.edge_layer_3(edge_x)
+            return edge_x, []
+
         if 'maxpool' in self.options.suffix:
             edge_x = torch.cat([edge_x, edge_x.max(0, keepdim=True)[0].repeat((len(edge_x), 1))], dim=-1)
             edge_x = self.edge_layer_3(edge_x)
@@ -216,16 +226,21 @@ class MPModule(nn.Module):
                 loop_confidence.append(confidence[loop_index])
                 continue
             continue
-        loop_confidence = torch.stack(loop_confidence, dim=0)                        
-        if len(loop_corner_indices) > 1 and 'invalid' not in self.options.suffix:
-            loop_subset_mask = torch.stack([torch.stack([(corner_indices_1.unsqueeze(-1) == corner_indices_2).max(-1)[0].min(0)[0] for corner_indices_2 in loop_corner_indices]) for corner_indices_1 in loop_corner_indices])
-            loop_subset_mask = torch.max(loop_subset_mask, loop_subset_mask.transpose(0, 1))
-            confidence_mask = loop_confidence.unsqueeze(-1) < loop_confidence
-            valid_indices = ((loop_subset_mask & confidence_mask).max(-1)[0] == 0).nonzero()[:, 0]
-            loop_confidence = loop_confidence[valid_indices]
-            loop_corner_indices = [loop_corner_indices[index] for index in valid_indices]
-            pass
+        loop_confidence = torch.stack(loop_confidence, dim=0)             
+
+        # if len(loop_corner_indices) > 1 and 'invalid' not in self.options.suffix:
+        #     loop_subset_mask = torch.stack([torch.stack([(corner_indices_1.unsqueeze(-1) == corner_indices_2).max(-1)[0].min(0)[0] for corner_indices_2 in loop_corner_indices]) for corner_indices_1 in loop_corner_indices])
+        #     loop_subset_mask = torch.max(loop_subset_mask, loop_subset_mask.transpose(0, 1))
+        #     confidence_mask = loop_confidence.unsqueeze(-1) < loop_confidence
+        #     valid_indices = ((loop_subset_mask & confidence_mask).max(-1)[0] == 0).nonzero()[:, 0]
+        #     loop_confidence = loop_confidence[valid_indices]
+        #     loop_corner_indices = [loop_corner_indices[index] for index in valid_indices]
+        #     pass
         
+        # ## DEBUG DRAW LOOPS
+        # draw_loops(loop_corner_indices, loop_confidence, all_corners, dst="debug/before_mp")
+        # ## DEBUG DRAW LOOPS
+
         if len(loop_confidence) > 200:
             #order = np.argsort([confidence.item() for confidence in loop_confidence])[::-1][:200]
             _, order = torch.sort(loop_confidence, descending=True)[:200]
@@ -290,15 +305,18 @@ class MPModule(nn.Module):
 
         edge_x_from_conflict = (edge_conflict_mask.float().unsqueeze(-1) * edge_x).max(1)[0]
         #loop_x_from_conflict = (loop_conflict_mask.float().unsqueeze(-1) * loop_x).max(1)[0]
-        edge_xs = [edge_x, edge_x_from_loop, edge_x_from_conflict]
+        if 'from_loop' in self.options.suffix:
+            edge_xs = [edge_x, edge_x_from_loop]
+        else:
+            edge_xs = [edge_x, edge_x_from_loop, edge_x_from_conflict]
 
         if 'image' in self.options.suffix:
             edge_xs.append(image_x.repeat((len(edge_x), 1)))
             pass
         edge_x = torch.cat(edge_xs, dim=-1)
         edge_x = self.edge_layer_3(edge_x)
-        
-        return edge_x, [loop_edge_masks, loop_x]
+
+        return edge_x, [loop_edge_masks, loop_x], [loop_corner_indices, loop_confidence, all_corners]
 
 class ImageAE(nn.Module):
     def __init__(self):
@@ -357,13 +375,55 @@ class ImageAE(nn.Module):
         edge_image_pred = self.decoder(image_x)
         return edge_image_pred, image_x_1, image_x
 
+class CNN(nn.Module):
+
+    def __init__(self, options, feat_size=5, num_classes=1000):
+        super(CNN, self).__init__()
+
+        self.C1 = nn.Conv2d(feat_size, 128, kernel_size=5, stride=2, padding=1)
+        self.C2 = nn.Conv2d(128, 128, kernel_size=5, stride=2, padding=1)
+        self.C3 = nn.Conv2d(128, 128, kernel_size=5, stride=2, padding=1)
+        self.C4 = nn.Conv2d(128, 128, kernel_size=5, stride=3, padding=1)
+        self.C5 = nn.Conv2d(128, 128, kernel_size=5, stride=3, padding=1)
+        self.C6 = nn.Conv2d(128, 256, kernel_size=5, stride=3, padding=1)
+        self.relu = nn.ReLU(inplace=True)
+        return 
+
+    def forward(self, x):
+
+        # Conv block 1
+        x = self.C1(x)
+        x = self.relu(x)
+
+        # Conv block 2
+        x = self.C2(x)
+        x = self.relu(x)
+
+        # Conv block 3
+        x = self.C3(x)
+        x = self.relu(x)
+
+        # Conv block 4
+        x = self.C4(x)
+        x = self.relu(x)
+
+        # Conv block 5
+        x = self.C5(x)
+        x = self.relu(x)
+
+        # Conv block 6
+        x = self.C6(x)
+        x = self.relu(x)
+
+        x = x.view(-1, 256)
+        return x
 
 class MPNN(nn.Module):
     def __init__(self, options, num_classes=1):
         super(MPNN, self).__init__()
         self.options = options
         
-        self.image_encoder = ImageAE()
+        #self.image_encoder = ImageAE()
 
         if '64' in self.options.suffix:
             self.edge_encoder = SparseEncoderSpatial(64, 63)
@@ -371,6 +431,7 @@ class MPNN(nn.Module):
             self.edge_encoder = SparseEncoderSpatial(4, 255)
             pass
         #self.multi_loop_pred = SparseEncoder(4, 255)
+        self.cnn_encoder = CNN(options)
 
         #self.nonlocal_encoder = NonLocalEncoder(options, 1024)
         self.edge_decoder_0 = Decoder(256, 1, spatial_size=2)
@@ -379,7 +440,7 @@ class MPNN(nn.Module):
 
         self.edge_pred_0 = nn.Sequential(nn.Linear(256, 64), nn.ReLU(), nn.Linear(64, 1))        
         self.edge_pred_1 = nn.Sequential(nn.Linear(256, 64), nn.ReLU(), nn.Linear(64, 1))
-        self.edge_pred_2 = nn.Sequential(nn.Linear(256, 64), nn.ReLU(), nn.Linear(64, 1))                        
+        self.loop_pred_0 = nn.Sequential(nn.Linear(256, 64), nn.ReLU(), nn.Linear(64, 1))        
 
         self.mp_module_1 = MPModule(options)
         
@@ -407,8 +468,9 @@ class MPNN(nn.Module):
             image_x = None
             image_x_spatial = image
             pass
-        
-        edge_x = self.edge_encoder(image_x_spatial, all_edges.unsqueeze(1))
+
+        #edge_x = self.edge_encoder(image_x_spatial, all_edges.unsqueeze(1))
+        edge_x = self.cnn_encoder(image)
 
         results = []        
         edge_pred = torch.sigmoid(self.edge_pred_0(edge_x)).view(-1)
@@ -417,12 +479,19 @@ class MPNN(nn.Module):
         results.append(result)
         
         if 'sharing' in self.options.suffix or 'maxpool' in self.options.suffix or 'fully' in self.options.suffix:            
-            edge_x, loop_info = self.mp_module_1(edge_pred, edge_corner, all_corners, edge_x, image_x)
+            edge_x, loop_info, debug_info = self.mp_module_1(edge_pred, edge_corner, all_corners, edge_x, image_x)
             edge_pred = torch.sigmoid(self.edge_pred_0(edge_x)).view(-1)
             edge_mask_pred = self.edge_decoder_1(edge_x)        
             result = [edge_pred, edge_mask_pred]
-            if len(loop_info) > 0 and False:
-                result += [loop_info[0]]
+            
+            if len(loop_info) > 0 and True:
+                loop_pred = torch.sigmoid(self.loop_pred_0(loop_info[1])).view(-1)
+
+                # debug
+                [loop_corner_indices, loop_confidence, all_corners] = debug_info
+                draw_loops(loop_corner_indices, loop_pred, all_corners, dst="debug/before_mp")
+
+                result += [loop_info[0], loop_pred]
                 pass
             results.append(result)            
             pass

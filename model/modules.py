@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import cv2
+from utils.utils import draw_loops
 
 dot_product_threshold = np.cos(np.deg2rad(20))
 
@@ -623,6 +624,11 @@ def findBestMultiLoopEdge(edge_confidence, edge_corner, all_corners):
             loop_confidence.append(confidence[loop_index])
             continue
         continue
+
+    # ## DEBUG DRAW LOOPS
+    # draw_loops(loop_corner_indices, loop_confidence, all_corners, dst="debug/after_mp")
+    # ## DEBUG DRAW LOOPS
+    
     loop_confidence = torch.stack(loop_confidence, dim=0)
     if len(loop_corner_indices) > 1:
         loop_subset_mask = torch.stack([torch.stack([(corner_indices_1.unsqueeze(-1) == corner_indices_2).max(-1)[0].min(0)[0] for corner_indices_2 in loop_corner_indices]) for corner_indices_1 in loop_corner_indices])

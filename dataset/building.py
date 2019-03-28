@@ -3,158 +3,11 @@ import os
 from skimage.draw import line_aa
 from PIL import Image, ImageDraw
 import torch
-import cv2
 import itertools
 from scipy.spatial.distance import cdist
 from scipy.optimize import linear_sum_assignment
-
-def draw_edges(edges_on, edges):
-    im = np.zeros((256, 256))
-    for edge in edges[edges_on > 0.5]:
-        cv2.line(im, (edge[1], edge[0]), (edge[3], edge[2]), thickness=3, color=1)
-        continue
-    return im
-
-def draw_edge(edge_index, edges):
-    im = np.zeros((256, 256))
-    edge = edges[edge_index]
-    cv2.line(im, (edge[1], edge[0]), (edge[3], edge[2]), thickness=3, color=1)
-    return im
-
-def findLoopsModuleCPU2(edge_confidence, edge_corner, num_corners, max_num_loop_corners=10, confidence_threshold=0, corners=None, disable_colinear=True):
-    ## The confidence of connecting two corners
-    corner_confidence = torch.zeros(num_corners, num_corners)
-    corner_confidence[edge_corner[:, 0], edge_corner[:, 1]] = edge_confidence
-    corner_confidence[edge_corner[:, 1], edge_corner[:, 0]] = edge_confidence
-    corner_confidence = corner_confidence - torch.diag(torch.ones(num_corners)) * max_num_loop_corners
-    
-    corner_range = torch.arange(num_corners).long()
-    corner_range_map = corner_range.view((-1, 1)).repeat((1, num_corners))
-
-    ## Paths = [(path_confidence, path_corners)] where the ith path has a length of (i + 1), path_confidence is the summation of confidence along the path between two corners, and path_corners is visited corners along the path
-    paths = [(corner_confidence, corner_range_map.unsqueeze(-1))]
-    dot_product_threshold = np.cos(np.deg2rad(20))
-    while len(paths) < max_num_loop_corners - 1:
-        path_confidence, path_corners = paths[-1]
-        total_confidence = path_confidence.unsqueeze(-1) + corner_confidence
-        visited_mask = (path_corners.unsqueeze(-1) == corner_range).max(-2)[0]
-        if disable_colinear and path_corners.shape[-1] > 1:
-            prev_edge = corners[path_corners[:, :, -1]] - corners[path_corners[:, :, -2]]
-            prev_edge = prev_edge / torch.norm(prev_edge, dim=-1, keepdim=True)
-            current_edge = corners - corners[path_corners[:, :, -1]].unsqueeze(-2)
-            current_edge = current_edge / torch.norm(current_edge, dim=-1, keepdim=True)
-            dot_product = (prev_edge.unsqueeze(-2) * current_edge).sum(-1)
-            colinear_mask = torch.abs(dot_product) > dot_product_threshold
-            visited_mask = visited_mask | colinear_mask
-            pass
-        visited_mask = visited_mask.float()
-        #visited_mask = torch.max(visited_mask, (prev_corner.unsqueeze(1) == corner_range.unsqueeze(-1)).float())
-        total_confidence = total_confidence * (1 - visited_mask) - (max_num_loop_corners) * visited_mask
-        #print(path_confidence, total_confidence, visited_mask)        
-        #print(total_confidence, visited_mask)
-        new_path_confidence, last_corner = total_confidence.max(1)
-        existing_path = path_corners[corner_range_map.view(-1), last_corner.view(-1)].view((num_corners, num_corners, -1))
-        new_path_corners = torch.cat([existing_path, last_corner.unsqueeze(-1)], dim=-1)
-        paths.append((new_path_confidence, new_path_corners))
-        continue
-    #print(paths)
-    ## Find closed loops by adding the starting point to the path
-    paths = paths[1:]
-    loops = []
-    for index, (path_confidence, path_corners) in enumerate(paths):
-        total_confidence = path_confidence.unsqueeze(-1) + corner_confidence
-        visited_mask = (path_corners[:, :, 1:].unsqueeze(-1) == corner_range).float().max(-2)[0]
-        total_confidence = total_confidence * (1 - visited_mask) - (max_num_loop_corners) * visited_mask
-        #print(total_confidence, visited_mask)
-        loop_confidence, last_corner = total_confidence.max(1)
-        last_corner = last_corner.diagonal()
-        loop = path_corners[corner_range, last_corner].view((num_corners, -1))
-        loop = torch.cat([loop, last_corner.unsqueeze(-1)], dim=-1)
-        loop_confidence = loop_confidence.diagonal() / (index + 3)
-        mask = loop_confidence > confidence_threshold
-        if mask.sum().item() == 0:
-            loop_confidence, index = loop_confidence.max(0, keepdim=True)
-            index = index.squeeze().item()
-            loops.append((loop_confidence, loop[index:index + 1]))
-            continue
-        loop_confidence = loop_confidence[mask]
-        loop = loop[mask]
-        if len(loop) > 0:
-            same_mask = torch.abs(loop.unsqueeze(1).unsqueeze(0) - loop.unsqueeze(-1).unsqueeze(1)).min(-1)[0].max(-1)[0] == 0
-            loop_range = torch.arange(len(loop)).long()
-            same_mask = same_mask & (loop_range.unsqueeze(-1) > loop_range.unsqueeze(0))
-            same_mask = same_mask.max(-1)[0]^1
-            loops.append((loop_confidence[same_mask], loop[same_mask]))
-        else:
-            loops.append((loop_confidence, loop))
-            pass
-        continue
-    return loops
-
-def findLoopsModuleCPU(edge_confidence, edge_corner, num_corners, max_num_loop_corners=10, confidence_threshold=0):
-    ## The confidence of connecting two corners
-    corner_confidence = torch.zeros(num_corners, num_corners)
-    corner_confidence[edge_corner[:, 0], edge_corner[:, 1]] = edge_confidence
-    corner_confidence[edge_corner[:, 1], edge_corner[:, 0]] = edge_confidence
-    corner_confidence = corner_confidence - torch.diag(torch.ones(num_corners)) * max_num_loop_corners
-    
-    corner_range = torch.arange(num_corners).long()
-    corner_range_map = corner_range.view((-1, 1)).repeat((1, num_corners))
-
-    ## Paths = [(path_confidence, path_corners)] where the ith path has a length of (i + 1), path_confidence is the summation of confidence along the path between two corners, and path_corners is visited corners along the path
-    paths = [(corner_confidence, corner_range_map.unsqueeze(-1))]
-    while len(paths) < max_num_loop_corners - 1:
-        path_confidence, path_corners = paths[-1]
-        total_confidence = path_confidence.unsqueeze(-1) + corner_confidence
-        prev_corner = path_corners[:, :, -1]
-        visited_mask = (path_corners.unsqueeze(-1) == corner_range).max(-2)[0].float()
-        #visited_mask = torch.max(visited_mask, (prev_corner.unsqueeze(1) == corner_range.unsqueeze(-1)).float())
-        total_confidence = total_confidence * (1 - visited_mask) - (max_num_loop_corners) * visited_mask
-        #print(path_confidence, total_confidence, visited_mask)        
-        #print(total_confidence, visited_mask)
-        new_path_confidence, last_corner = total_confidence.max(1)
-        existing_path = path_corners[corner_range_map.view(-1), last_corner.view(-1)].view((num_corners, num_corners, -1))
-        new_path_corners = torch.cat([existing_path, last_corner.unsqueeze(-1)], dim=-1)
-        paths.append((new_path_confidence, new_path_corners))
-        continue
-    #print(paths)
-    ## Find closed loops by adding the starting point to the path
-    paths = paths[1:]
-    loops = []
-    max_confidence_loop = (0, None)
-    for index, (path_confidence, path_corners) in enumerate(paths):
-        total_confidence = path_confidence.unsqueeze(-1) + corner_confidence
-        visited_mask = (path_corners[:, :, 1:].unsqueeze(-1) == corner_range).float().max(-2)[0]
-        total_confidence = total_confidence * (1 - visited_mask) - (max_num_loop_corners) * visited_mask
-        #print(total_confidence, visited_mask)
-        loop_confidence, last_corner = total_confidence.max(1)
-        last_corner = last_corner.diagonal()
-        loop = path_corners[corner_range, last_corner].view((num_corners, -1))
-        loop = torch.cat([loop, last_corner.unsqueeze(-1)], dim=-1)
-        loop_confidence = loop_confidence.diagonal() / (index + 3)
-        mask = loop_confidence > confidence_threshold
-        if mask.sum().item() == 0:
-            loop_confidence, index = loop_confidence.max(0, keepdim=True)
-            index = index.squeeze().item()
-            if loop_confidence.item() > max_confidence_loop[0]:
-                max_confidence_loop = (loop_confidence.item(), loop[index:index + 1])
-                pass
-        else:
-            loop_confidence = loop_confidence[mask]
-            loop = loop[mask]
-            if len(loop) > 0:
-                same_mask = torch.abs(loop.unsqueeze(1).unsqueeze(0) - loop.unsqueeze(-1).unsqueeze(1)).min(-1)[0].max(-1)[0] == 0
-                loop_range = torch.arange(len(loop)).long()
-                same_mask = same_mask & (loop_range.unsqueeze(-1) > loop_range.unsqueeze(0))
-                same_mask = same_mask.max(-1)[0]^1
-                loops.append(loop[same_mask])
-                pass
-            pass
-        continue
-    if len(loops) == 0:
-        loops.append(max_confidence_loop[1])
-        pass
-    return loops
+from utils.utils import draw_edges, draw_edge, findLoopsModuleCPU
+import cv2
 
 class Building():
     """Maintain a building to create data examples in the same format"""
@@ -184,16 +37,6 @@ class Building():
         annot_path = os.path.join(self.annots_folder, _id +'.npy')
         annot = np.load(open(annot_path, 'rb'), encoding='bytes')
         graph = dict(annot[()])
-
-        # # augment data
-        # if with_augmentation:
-        #     rot = np.random.choice([0, 90, 180, 270])
-        #     flip = np.random.choice([True, False])
-        #     use_gt = np.random.choice([False])
-        # else:
-        #     rot = 0
-        #     flip = False
-        #     use_gt = False
         
         rot = 0
         flip = False
@@ -237,7 +80,6 @@ class Building():
 
         # read images
         self.rgb = self.read_input_images(_id, self.dataset_folder)
-        #self.imgs = self.read_input_images(_id, self.dataset_folder)
 
         self.edge_corner_annots = edge_corner_annots
         self.corners_gt = corners_gt                
@@ -255,8 +97,8 @@ class Building():
         self.corners_annot = corners_annot
         self.edges_annot = edges_annot
 
-        self.add_colinear_edges(self.edges_gt)
-        #self.add_colinear_edges_annot()        
+        self.add_colinear_edges(self.edges_gt) # CHECK THIS
+        #self.add_colinear_edges_annot() # CHECK THIS
         
         if options.suffix != '':
             suffix = '_' + corner_type + '_' + options.suffix
@@ -391,12 +233,12 @@ class Building():
         edge_index: edge index to flip, -1 for random sampling
         num_edges_source: source graph size, -1 for using the latest
         """
+
         #assert(num_edges_source < len(self.predicted_edges))
         if self.with_augmentation:
             imgs, corners_det, edges_det = self.augment(self.rgb.copy(), self.corners_det, self.edges_det)
         else:
             imgs, corners_det, edges_det = self.rgb, self.corners_det, self.edges_det
-            pass
 
         imgs = imgs.transpose((2, 0, 1)).astype(np.float32) / 255
         if load_heatmaps:
@@ -928,80 +770,100 @@ class Building():
         return new+rot_center
 
     def augment(self, imgs, corners, edges):
-        size = imgs.shape[1]
-        #center = vertices[0] + np.random.random(2) * (vertices[-1] - vertices[0])
-        if self.with_augmentation:
-            angle = np.random.random() * 360
-        else:
-            angle = 0
-            pass
-        #rotation_matrix = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
-        #print('vertices', tuple(((vertices[0] + vertices[-1]) / 2).tolist()))
-        #rotation_matrix = cv2.getRotationMatrix2D(tuple(((vertices[0] + vertices[-1]) / 2).tolist()), angle, 1)
-        
-        # ys, xs = np.nonzero(imgs.min(-1) < 250)
-        # vertices = np.array([[xs.min(), ys.min()], [xs.min(), ys.max()], [xs.max(), ys.min()], [xs.max(), ys.max()]])        
-        # print(vertices)
-        xs, ys = corners[:, 1], corners[:, 0]
-        vertices = np.array([[xs.min(), ys.min()], [xs.min(), ys.max()], [xs.max(), ys.min()], [xs.max(), ys.max()]])
 
-        # print(vertices)
-        # exit(1)
-        rotation_matrix = cv2.getRotationMatrix2D((0, 0), angle, 1)
-        transformed_vertices = np.matmul(rotation_matrix, np.concatenate([vertices, np.ones((len(vertices), 1))], axis=-1).transpose()).transpose()
+        # augmentation
+        flip = np.random.choice([False, True])
+        rot = np.random.choice([0, 90, 180, 270])
 
-        center = transformed_vertices.mean(0)
-        transformed_vertices = center + (transformed_vertices - center) * 1.1
+        # rotate and flip
+        edges = self.rotate_flip_edge(edges, rot, flip)
+        corners = self.rotate_flip_corner(corners, rot, flip)
+
+        edges = np.array(edges).astype(np.int32)
+        corners = np.array(corners).astype(np.int32)
         
-        mins = transformed_vertices.min(0)
-        maxs = transformed_vertices.max(0)
-        max_range = (maxs - mins).max()
-        if self.with_augmentation:
-            new_size = min(max_range, size) + max(size - max_range, 0) * np.random.random()
-            #new_size = size
-        else:
-            new_size = max_range
-            #new_size = size
-            pass
-        scale = float(new_size) / max_range
-        if self.with_augmentation:
-            offset = (np.random.random(2) * 2 - 1) * (size - (maxs - mins) * scale) / 2 + (size / 2 - (maxs + mins) / 2 * scale)
-        else:
-            offset = (size / 2 - (maxs + mins) / 2 * scale)
-            #offset = np.zeros(2)
-            pass
-        #offset = 0 * (size - (maxs - mins) * scale) + (size / 2 - (maxs + mins) / 2 * scale)
-        translation_matrix = np.array([[scale, 0, offset[0]], [0, scale, offset[1]]])
-        transformation_matrix = np.matmul(translation_matrix, np.concatenate([rotation_matrix, np.array([[0, 0, 1]])], axis=0))
-        #transformation_matrix_shuffled = np.stack([transformation_matrix[1], transformation_matrix[0]], axis=0)
-        # transformation_matrix_shuffled = transformation_matrix.copy()
-        # transformation_matrix_shuffled[1, 2] = transformation_matrix[0, 2]
-        # transformation_matrix_shuffled[0, 2] = transformation_matrix[1, 2]        
-        imgs = cv2.warpAffine(imgs, transformation_matrix, (size, size), borderValue=(255, 255, 255))
-        #print(corners)
-        corners_ori = corners
-        corners = np.matmul(transformation_matrix, np.concatenate([corners[:, [1, 0]], np.ones((len(corners), 1))], axis=-1).transpose()).transpose()
-        #print(scale, offset, size, mins, maxs, corners.min(), corners.max())        
+        rgb = Image.fromarray(imgs).rotate(rot)
+        if flip:
+            rgb = rgb.transpose(Image.FLIP_LEFT_RIGHT)
+        rgb = np.array(rgb)
+
+        return rgb, corners, edges 
+
+    # def augment(self, imgs, corners, edges):
+    #     size = imgs.shape[1]
+    #     #center = vertices[0] + np.random.random(2) * (vertices[-1] - vertices[0])
+    #     if self.with_augmentation:
+    #         angle = np.random.random() * 360
+    #     else:
+    #         angle = 0
+    #         pass
+    #     #rotation_matrix = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
+    #     #print('vertices', tuple(((vertices[0] + vertices[-1]) / 2).tolist()))
+    #     #rotation_matrix = cv2.getRotationMatrix2D(tuple(((vertices[0] + vertices[-1]) / 2).tolist()), angle, 1)
         
-        if (corners.min() < 0 or corners.max() > 256) and False:
-            cv2.imwrite('test/image.png', imgs.astype(np.uint8))
-            print(vertices)
-            print(corners_ori)
-            print(np.matmul(rotation_matrix, np.concatenate([corners_ori[:, [1, 0]], np.ones((len(corners), 1))], axis=-1).transpose()).transpose() * scale)
-            print(transformed_vertices * scale)
-            print(scale, size, new_size, mins, maxs, (maxs - mins) * scale, (maxs + mins) / 2 * scale, offset, corners.min(0), corners.max(0))
-            print((size - (maxs - mins) * scale) / 2, size / 2 - (maxs + mins) / 2 * scale, (maxs + mins) / 2 * scale)
-            exit(1)
-            pass
-        corners = corners[:, [1, 0]]            
-        corners = np.clip(np.round(corners).astype(np.int32), 0, size - 1)
-        edge_points = edges.reshape((-1, 2))[:, [1, 0]]
-        edge_points = np.matmul(transformation_matrix, np.concatenate([edge_points, np.ones((len(edge_points), 1))], axis=-1).transpose()).transpose()
-        edges = edge_points[:, [1, 0]].reshape((-1, 4))
-        edges = np.clip(np.round(edges).astype(np.int32), 0, size - 1)
-        #print('rotation', rotation_matrix, translation_matrix)
-        #print(corners)
-        return imgs, corners, edges
+    #     # ys, xs = np.nonzero(imgs.min(-1) < 250)
+    #     # vertices = np.array([[xs.min(), ys.min()], [xs.min(), ys.max()], [xs.max(), ys.min()], [xs.max(), ys.max()]])        
+    #     # print(vertices)
+    #     xs, ys = corners[:, 1], corners[:, 0]
+    #     vertices = np.array([[xs.min(), ys.min()], [xs.min(), ys.max()], [xs.max(), ys.min()], [xs.max(), ys.max()]])
+
+    #     # print(vertices)
+    #     # exit(1)
+    #     rotation_matrix = cv2.getRotationMatrix2D((0, 0), angle, 1)
+    #     transformed_vertices = np.matmul(rotation_matrix, np.concatenate([vertices, np.ones((len(vertices), 1))], axis=-1).transpose()).transpose()
+
+    #     center = transformed_vertices.mean(0)
+    #     transformed_vertices = center + (transformed_vertices - center) * 1.1
+        
+    #     mins = transformed_vertices.min(0)
+    #     maxs = transformed_vertices.max(0)
+    #     max_range = (maxs - mins).max()
+    #     if self.with_augmentation:
+    #         new_size = min(max_range, size) + max(size - max_range, 0) * np.random.random()
+    #         #new_size = size
+    #     else:
+    #         new_size = max_range
+    #         #new_size = size
+    #         pass
+    #     scale = float(new_size) / max_range
+    #     if self.with_augmentation:
+    #         offset = (np.random.random(2) * 2 - 1) * (size - (maxs - mins) * scale) / 2 + (size / 2 - (maxs + mins) / 2 * scale)
+    #     else:
+    #         offset = (size / 2 - (maxs + mins) / 2 * scale)
+    #         #offset = np.zeros(2)
+    #         pass
+    #     #offset = 0 * (size - (maxs - mins) * scale) + (size / 2 - (maxs + mins) / 2 * scale)
+    #     translation_matrix = np.array([[scale, 0, offset[0]], [0, scale, offset[1]]])
+    #     transformation_matrix = np.matmul(translation_matrix, np.concatenate([rotation_matrix, np.array([[0, 0, 1]])], axis=0))
+    #     #transformation_matrix_shuffled = np.stack([transformation_matrix[1], transformation_matrix[0]], axis=0)
+    #     # transformation_matrix_shuffled = transformation_matrix.copy()
+    #     # transformation_matrix_shuffled[1, 2] = transformation_matrix[0, 2]
+    #     # transformation_matrix_shuffled[0, 2] = transformation_matrix[1, 2]        
+    #     imgs = cv2.warpAffine(imgs, transformation_matrix, (size, size), borderValue=(255, 255, 255))
+    #     #print(corners)
+    #     corners_ori = corners
+    #     corners = np.matmul(transformation_matrix, np.concatenate([corners[:, [1, 0]], np.ones((len(corners), 1))], axis=-1).transpose()).transpose()
+    #     #print(scale, offset, size, mins, maxs, corners.min(), corners.max())        
+        
+    #     if (corners.min() < 0 or corners.max() > 256) and False:
+    #         cv2.imwrite('test/image.png', imgs.astype(np.uint8))
+    #         print(vertices)
+    #         print(corners_ori)
+    #         print(np.matmul(rotation_matrix, np.concatenate([corners_ori[:, [1, 0]], np.ones((len(corners), 1))], axis=-1).transpose()).transpose() * scale)
+    #         print(transformed_vertices * scale)
+    #         print(scale, size, new_size, mins, maxs, (maxs - mins) * scale, (maxs + mins) / 2 * scale, offset, corners.min(0), corners.max(0))
+    #         print((size - (maxs - mins) * scale) / 2, size / 2 - (maxs + mins) / 2 * scale, (maxs + mins) / 2 * scale)
+    #         exit(1)
+    #         pass
+    #     corners = corners[:, [1, 0]]            
+    #     corners = np.clip(np.round(corners).astype(np.int32), 0, size - 1)
+    #     edge_points = edges.reshape((-1, 2))[:, [1, 0]]
+    #     edge_points = np.matmul(transformation_matrix, np.concatenate([edge_points, np.ones((len(edge_points), 1))], axis=-1).transpose()).transpose()
+    #     edges = edge_points[:, [1, 0]].reshape((-1, 4))
+    #     edges = np.clip(np.round(edges).astype(np.int32), 0, size - 1)
+    #     #print('rotation', rotation_matrix, translation_matrix)
+    #     #print(corners)
+    #     return imgs, corners, edges
 
 
     def visualize(self, mode='last_mistake', edge_state=None, building_idx=None, post_processing=False, color=[255, 0, 255], debug=False):
@@ -1990,9 +1852,8 @@ class Building():
         return new_loop_labels, np.array(to_keep)
 
     def find_loops(self, current_edges, edge_corner, corners, edges_gt, num_corners):
-        all_loops = findLoopsModuleCPU2(torch.from_numpy(current_edges.astype(np.float32)), torch.from_numpy(edge_corner), num_corners, max_num_loop_corners=15, confidence_threshold=0.5, corners=torch.from_numpy(self.corners_det).float(), disable_colinear=False)        
+        all_loops = findLoopsModuleCPU(torch.from_numpy(current_edges.astype(np.float32)), torch.from_numpy(edge_corner), num_corners, max_num_loop_corners=15, confidence_threshold=0.5, corners=torch.from_numpy(self.corners_det).float(), disable_colinear=False)        
 
-        #all_loops = findLoopsModuleCPU(torch.from_numpy(current_edges.astype(np.float32)), torch.from_numpy(edge_corner), num_corners, max_num_loop_corners=20, confidence_threshold=0.7)        
         loop_corners = []
         loop_labels = []
         edges_loops = []
