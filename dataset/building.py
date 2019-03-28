@@ -240,6 +240,25 @@ class Building():
         else:
             imgs, corners_det, edges_det = self.rgb, self.corners_det, self.edges_det
 
+        # import matplotlib.pyplot as plt
+        # debug_im = Image.fromarray(imgs.copy())
+        # draw = ImageDraw.Draw(debug_im)
+        # # for c in corners_det:
+        # #     y, x = c
+        # #     print(y, x)
+        # #     draw.ellipse((x-2, y-2, x+2, y+2), fill='red')
+
+        # for k, e in enumerate(edges_det):
+        #     if self.edges_gt[k] == 1:
+        #         y1, x1, y2, x2 = e
+        #         draw.line((x1, y1, x2, y2), width=3, fill='red')
+
+        # plt.figure()
+        # plt.imshow(debug_im)
+        # plt.figure()
+        # plt.imshow(imgs)
+        # plt.show()
+
         imgs = imgs.transpose((2, 0, 1)).astype(np.float32) / 255
         if load_heatmaps:
             img_c, corner_masks = self.compute_corner_image(corners_det)
@@ -251,7 +270,6 @@ class Building():
                 continue
             edge_images = np.stack(edge_images, axis=0)
 
-            
             edge_mask = 255 - (draw_edges(np.ones(len(self.edges_annot), dtype=bool), np.round(self.edges_annot).astype(np.int32)) * 255).astype(np.uint8)
             #edge_mask = cv2.threshold(edge_mask, 127, 255, cv2.THRESH_BINARY)[1]            
             #cv2.imwrite('test/mask.png', edge_mask)            
