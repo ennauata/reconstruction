@@ -74,6 +74,20 @@ def main(options):
         model.load_state_dict(torch.load(options.checkpoint_dir + '/loop_checkpoint_{}_epoch_{}.pth'.format(options.suffix, options.num_epochs - 1)))
         optimizer.load_state_dict(torch.load(options.checkpoint_dir + '/loop_optim_{}_epoch_{}.pth'.format(options.suffix, options.num_epochs - 1)))
 
+    # restore only per edge classifier
+    if options.restore == 2:
+
+        edge_state_dict = torch.load('checkpoint/mpnn_annots_only_edge_classifier_remote/loop_checkpoint_edge_classifier_remote_epoch_99.pth')
+        own_state = model.state_dict()
+        for name, param in edge_state_dict.items():
+
+            if name not in own_state:
+                 continue
+            if isinstance(param, nn.Parameter):
+                param = param.data
+            own_state[name].copy_(param)
+            own_state[name].requires_grad = False
+
     # test option
     if options.task == 'test':
         dset_val = GraphData(options, valid_list, split='val', num_edges=0, load_heatmaps=True)
@@ -113,8 +127,8 @@ def main(options):
                 #print(dset_train.buildings[building_index]._id)
                 #print('num edges', len(edge_gt))
 
-                images = torch.cat([im_arr.unsqueeze(0).repeat((len(edge_images), 1, 1, 1)), edge_images.unsqueeze(1)], dim=1)
-                #images = im_arr.unsqueeze(0)
+                #images = torch.cat([im_arr.unsqueeze(0).repeat((len(edge_images), 1, 1, 1)), edge_images.unsqueeze(1)], dim=1)
+                images = im_arr.unsqueeze(0)
 
                 edge_image_pred, results = model(images, corners, edges, corner_edge_pairs, edge_corner)
 
@@ -124,35 +138,20 @@ def main(options):
                     losses.append(F.binary_cross_entropy(edge_image_pred, edge_image_gt))
                     pass
                 
-                for index, result in enumerate(results):
-                    
-                    # edge classification losses
-                    # add weight to handle class imbalance
-                    #weight = edge_gt * 4.0 + 1.0 
-                    edge_pred = result[0]
-                    edge_loss = F.binary_cross_entropy(edge_pred, edge_gt)                    
-                    losses.append(edge_loss)
-                    # print("true", torch.nonzero(edge_gt==1).shape)
-                    # print("false", torch.nonzero(edge_gt==0).shape)
-                    
-                    # edge segmentation losses
-                    if len(result) > 1:
-                        edge_mask_pred = result[1]
-                        edge_mask_gt = torch.nn.functional.interpolate(edge_images.unsqueeze(1), size=(64, 64), mode='bilinear').squeeze(1)                        
-                        losses.append(torch.nn.functional.binary_cross_entropy(edge_mask_pred, edge_mask_gt))
-                   
-                    # loop classification loss
-                    if len(result) > 2:                           
-                        loop_edge_mask = result[2]
-                        loop_pred = result[3]
-                        loop_gt = ((loop_edge_mask * edge_gt).sum(-1) == loop_edge_mask.sum(-1)).float()
-                        losses.append(torch.nn.functional.binary_cross_entropy(loop_pred, loop_gt))     
-                        # print(torch.nonzero(loop_gt==1).shape)
-                        # print(torch.nonzero(loop_gt==0).shape)           
-                        pass
-                    continue
-                
-                loss = sum(losses)        
+                # edge classification losses
+                edge_pred = results[0][0]
+                edge_loss = F.binary_cross_entropy(edge_pred, edge_gt)                    
+                losses.append(edge_loss)
+
+                # loop classification loss
+                loop_edge_mask = results[1][2]
+                loop_pred = results[1][3]
+                loop_gt = ((loop_edge_mask * edge_gt).sum(-1) == loop_edge_mask.sum(-1)).float()
+                weight = loop_gt * 4 + 1
+                losses.append(torch.nn.functional.binary_cross_entropy(loop_pred, loop_gt, weight=weight))     
+                # print(torch.nonzero(loop_gt==1).shape)
+                # print(torch.nonzero(loop_gt==0).shape)           
+                loss = sum(losses)      
                 loss.backward()
 
                 # update training step
@@ -186,11 +185,11 @@ def main(options):
                         images, _ = building.visualize(mode='', edge_state=edge_pred.detach().cpu().numpy() > 0.5)
                         cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_edge_' + str(pred_index) + '_pred.png', images[0])
 
-                        edge_mask_pred = result[1]
-                        cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_edge_mask_gt.png', cv2.resize((edge_mask_gt[edge_gt > 0.5].max(0)[0].squeeze().detach().cpu().numpy() * 255).astype(np.uint8), (256, 256)))
-                        if (edge_pred > 0.5).sum() > 0:
-                            cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_edge_mask_pred.png', cv2.resize((edge_mask_pred[edge_pred > 0.5].max(0)[0].squeeze().detach().cpu().numpy() * 255).astype(np.uint8), (256, 256)))
-                            pass
+                        # edge_mask_pred = result[1]
+                        # cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_edge_mask_gt.png', cv2.resize((edge_mask_gt[edge_gt > 0.5].max(0)[0].squeeze().detach().cpu().numpy() * 255).astype(np.uint8), (256, 256)))
+                        # if (edge_pred > 0.5).sum() > 0:
+                        #     cv2.imwrite(options.test_dir + '/' + str(index_offset) + '_edge_mask_pred.png', cv2.resize((edge_mask_pred[edge_pred > 0.5].max(0)[0].squeeze().detach().cpu().numpy() * 255).astype(np.uint8), (256, 256)))
+                        #     pass
 
                         # if len(result) > 2 and len(result[2]) > 1:
                         #     loop_mask_pred = result[2][1]                                                
@@ -230,12 +229,13 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
     all_statistics = []
     all_images = []
     row_images = []
+    all_images_loops = []
     final_images = []        
     for sample_index, sample in enumerate(data_iterator):
         im_arr, corner_images, edge_images, loop_images, corners, edges, corner_gt, edge_gt, corner_edge_pairs, edge_corner, left_edges, right_edges, building_index = sample[0].cuda().squeeze(0), sample[1].cuda().squeeze(0), sample[2].cuda().squeeze(0), sample[3].cuda().squeeze(0), sample[4].cuda().squeeze(0), sample[5].cuda().squeeze(0), sample[6].cuda().squeeze(0), sample[7].cuda().squeeze(), sample[8].cuda().squeeze(0), sample[9].cuda().squeeze(), sample[10].cuda().squeeze(), sample[11].cuda().squeeze(), sample[12].squeeze().item()
 
-        #images = im_arr.unsqueeze(0)
-        images = torch.cat([im_arr.unsqueeze(0).repeat((len(edge_images), 1, 1, 1)), edge_images.unsqueeze(1)], dim=1)
+        images = im_arr.unsqueeze(0)
+        #images = torch.cat([im_arr.unsqueeze(0).repeat((len(edge_images), 1, 1, 1)), edge_images.unsqueeze(1)], dim=1)
         edge_image_pred, results = model(images, corners, edges, corner_edge_pairs, edge_corner)
 
         losses = []
@@ -244,28 +244,28 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
             losses.append(F.binary_cross_entropy(edge_image_pred, edge_image_gt))
             pass
 
-        for index, result in enumerate(results):
+        #for index, result in enumerate(results):
 
-            # edge classification losses
-            edge_pred = result[0]
-            edge_loss = F.binary_cross_entropy(edge_pred, edge_gt)                    
-            losses.append(edge_loss)
+        # edge classification losses
+        edge_pred = results[0][0]
+        edge_loss = F.binary_cross_entropy(edge_pred, edge_gt)                    
+        losses.append(edge_loss)
 
-            # edge segmentation losses
-            if len(result) > 1:
-                edge_mask_pred = result[1]
-                edge_mask_gt = torch.nn.functional.interpolate(edge_images.unsqueeze(1), size=(64, 64), mode='bilinear').squeeze(1)                        
-                #losses.append(torch.nn.functional.binary_cross_entropy(edge_mask_pred, edge_mask_gt))
+        # # edge segmentation losses
+        # if len(result) > 1:
+        #     edge_mask_pred = result[1]
+        #     edge_mask_gt = torch.nn.functional.interpolate(edge_images.unsqueeze(1), size=(64, 64), mode='bilinear').squeeze(1)                        
+        #     #losses.append(torch.nn.functional.binary_cross_entropy(edge_mask_pred, edge_mask_gt))
 
-            # loop classification loss
-            if len(result) > 2:                           
-                loop_edge_mask = result[2]
-                loop_pred = result[3]
-                loop_gt = ((loop_edge_mask * edge_gt).sum(-1) == loop_edge_mask.sum(-1)).float()
-                losses.append(torch.nn.functional.binary_cross_entropy(loop_pred, loop_gt))     
-                # print(torch.nonzero(loop_gt==1).shape)
-                # print(torch.nonzero(loop_gt==0).shape)           
-                pass
+        # loop classification loss
+        #if len(result) > 1:                           
+        loop_edge_mask = results[1][2]
+        loop_pred = results[1][3]
+        loop_gt = ((loop_edge_mask * edge_gt).sum(-1) == loop_edge_mask.sum(-1)).float()
+        losses.append(torch.nn.functional.binary_cross_entropy(loop_pred, loop_gt))     
+        # print(torch.nonzero(loop_gt==1).shape)
+        # print(torch.nonzero(loop_gt==0).shape)           
+        #pass
         loss = sum(losses)        
 
         loss_values = [l.data.item() for l in losses]
@@ -293,11 +293,11 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                 if sample_index % 500 < 16:
                     cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_edge_' + str(pred_index) + '_pred.png', images[0])
 
-                    edge_mask_pred = result[1]
-                    cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_edge_mask_gt.png', cv2.resize((edge_mask_gt[edge_gt > 0.5].max(0)[0].squeeze().detach().cpu().numpy() * 255).astype(np.uint8), (256, 256)))
-                    if (edge_pred > 0.5).sum() > 0:
-                        cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_edge_mask_pred.png', cv2.resize((edge_mask_pred[edge_pred > 0.5].max(0)[0].squeeze().detach().cpu().numpy() * 255).astype(np.uint8), (256, 256)))
-                        pass
+                    # edge_mask_pred = result[1]
+                    # cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_edge_mask_gt.png', cv2.resize((edge_mask_gt[edge_gt > 0.5].max(0)[0].squeeze().detach().cpu().numpy() * 255).astype(np.uint8), (256, 256)))
+                    # if (edge_pred > 0.5).sum() > 0:
+                    #     cv2.imwrite(options.test_dir + '/val_' + str(index_offset) + '_edge_mask_pred.png', cv2.resize((edge_mask_pred[edge_pred > 0.5].max(0)[0].squeeze().detach().cpu().numpy() * 255).astype(np.uint8), (256, 256)))
+                    #     pass
                     # if len(result) > 2 and len(result[2]) > 1:
                     #     loop_mask_pred = result[2][1]                        
                     #     if (loop_gts[pred_index] > 0.5).sum() > 0:
@@ -309,8 +309,14 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
                     #     pass
                     # pass
                 
-                if visualize and pred_index == len(results) - 1:
-                #if visualize and (pred_index == 0):
+                #if visualize and pred_index == len(results) - 1:
+                if visualize and pred_index == 0:
+
+                    # visualize top 10 loops for each buildings
+                    imgs = building.visualize_top_k_loops(edge_pred, loop_pred, loop_edge_mask)
+                    all_images_loops.append(imgs)
+
+                    #if visualize and (pred_index == 0):
                     multi_loop_edge_mask, debug_info = findBestMultiLoopEdge(edge_pred, edge_corner, corners)
                     # images, _ = building.visualize(mode='', edge_state=multi_loop_edge_mask.detach().cpu().numpy() > 0.5, color=[255, 255, 0])
 
@@ -387,6 +393,8 @@ def testOneEpoch(options, model, dataset, additional_models=[], visualize=False)
         if len(row_images) > 0:
             all_images.append(row_images)
             pass        
+        image = tileImages(all_images_loops, background_color=0)
+        cv2.imwrite(options.test_dir + '/top_loops.png', image)
         image = tileImages(all_images, background_color=0)
         cv2.imwrite(options.test_dir + '/results.png', image)
         final_images = [final_images[c * 10:(c + 1) * 10] for c in range(len(final_images) // 10)]

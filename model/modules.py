@@ -611,7 +611,7 @@ def findBestMultiLoopEdge(edge_confidence, edge_corner, all_corners):
         pass
     
     all_loops = findLoopsModule(edge_confidence, edge_corner, num_corners, max_num_loop_corners=num_corners, corners=all_corners, disable_colinear=True)
-
+    
     #loop_pred = []
     loop_corner_indices = []
     loop_confidence = []

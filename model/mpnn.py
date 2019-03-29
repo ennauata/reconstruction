@@ -431,7 +431,7 @@ class MPNN(nn.Module):
             self.edge_encoder = SparseEncoderSpatial(4, 255)
             pass
         #self.multi_loop_pred = SparseEncoder(4, 255)
-        self.cnn_encoder = CNN(options)
+        #self.cnn_encoder = CNN(options)
 
         #self.nonlocal_encoder = NonLocalEncoder(options, 1024)
         self.edge_decoder_0 = Decoder(256, 1, spatial_size=2)
@@ -469,8 +469,8 @@ class MPNN(nn.Module):
             image_x_spatial = image
             pass
 
-        #edge_x = self.edge_encoder(image_x_spatial, all_edges.unsqueeze(1))
-        edge_x = self.cnn_encoder(image)
+        edge_x = self.edge_encoder(image_x_spatial, all_edges.unsqueeze(1))
+        #edge_x = self.cnn_encoder(image)
 
         results = []        
         edge_pred = torch.sigmoid(self.edge_pred_0(edge_x)).view(-1)
@@ -480,16 +480,16 @@ class MPNN(nn.Module):
         
         if 'sharing' in self.options.suffix or 'maxpool' in self.options.suffix or 'fully' in self.options.suffix:            
             edge_x, loop_info, debug_info = self.mp_module_1(edge_pred, edge_corner, all_corners, edge_x, image_x)
-            edge_pred = torch.sigmoid(self.edge_pred_0(edge_x)).view(-1)
-            edge_mask_pred = self.edge_decoder_1(edge_x)        
-            result = [edge_pred, edge_mask_pred]
+            # edge_pred = torch.sigmoid(self.edge_pred_0(edge_x)).view(-1)
+            # edge_mask_pred = self.edge_decoder_1(edge_x)        
+            # result = [edge_pred, edge_mask_pred]
             
             if len(loop_info) > 0 and True:
                 loop_pred = torch.sigmoid(self.loop_pred_0(loop_info[1])).view(-1)
 
                 # debug
                 [loop_corner_indices, loop_confidence, all_corners] = debug_info
-                draw_loops(loop_corner_indices, loop_pred, all_corners, dst="debug/before_mp")
+                #draw_loops(loop_corner_indices, loop_pred, all_corners, dst="debug/before_mp")
 
                 result += [loop_info[0], loop_pred]
                 pass
