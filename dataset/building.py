@@ -558,6 +558,7 @@ class Building():
                 continue
             graph_edge_attr = np.concatenate([graph_edge_attr, np.ones((len(graph_edge_index) - len(graph_edge_attr), 1), dtype=np.float32)], axis=0)
             pass
+            
         left_edges = [np.array([[edge_index, neighbor] for neighbor in neighbors[0]]) for edge_index, neighbors in enumerate(edge_neighbors)]
         left_edges = np.concatenate(left_edges, axis=0)
         left_edges = left_edges[left_edges[:, 0] != left_edges[:, 1]]
@@ -936,6 +937,37 @@ class Building():
             images.append(edge_image_annot)
 
         return images, np.array([(np.logical_and(self.predicted_edges[-1] == self.edges_gt, self.edges_gt == 1)).sum(), self.predicted_edges[-1].sum(), self.edges_gt.sum(), int(np.all(self.predicted_edges[-1] == self.edges_gt))])
+
+
+    def visualize_top_k_loops(self, edge_pred, loop_pred, loop_edge_mask, topk=15):
+
+        # sort loops
+        loop_pred = loop_pred.detach().cpu().numpy()
+        loop_edge_mask = loop_edge_mask.detach().cpu().numpy()
+        inds = np.argsort(loop_pred)[::-1]
+
+        loop_pred = loop_pred[inds]
+        loop_edge_mask = loop_edge_mask[inds]
+
+        # draw edge preds
+        im_edge = self.rgb.copy()   
+        edge_pred = edge_pred.detach().cpu().numpy()
+        edge_mask = draw_edges(edge_pred, self.edges_det)
+        im_edge[edge_mask > 0.5] = np.array([255, 0, 0], dtype=np.uint8)
+
+        # draw loops
+        top_k_loops = []
+        for k in range(topk):
+            if k < loop_edge_mask.shape[0]:  
+                im_loop = self.rgb.copy() 
+                edge_mask = draw_edges(loop_edge_mask[k], self.edges_det)
+                im_loop[edge_mask > 0.5] = np.array([255, 255, 0], dtype=np.uint8)
+                cv2.putText(im_loop, "{:.2f}%".format(loop_pred[k]*100.0), (20, 20), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.5, color=(0, 0, 255))
+            else:
+                im_loop = np.zeros_like(self.rgb.copy())
+
+            top_k_loops.append(im_loop)
+        return [im_edge] + top_k_loops
 
     def visualize_multiple_loops(self, loop_edges):
         image = self.rgb.copy()        
